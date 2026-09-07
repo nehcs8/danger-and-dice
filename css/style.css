@@ -1,0 +1,557 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+.hidden { display: none; }
+
+body {
+  background: #1a1a2e;
+  color: #e0d8c8;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Screens ─────────────────────────────────────────────────────────────── */
+.screen        { display: none; }
+.screen.active { display: flex; flex-direction: column; height: 100vh; }
+
+/* ── Setup screen ────────────────────────────────────────────────────────── */
+#screen-setup {
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+}
+
+#screen-setup h1 {
+  font-size: 2.4rem;
+  color: #ffd700;
+  letter-spacing: 2px;
+}
+
+#player-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(255,255,255,0.05);
+  padding: 20px;
+  border-radius: 8px;
+}
+
+.player-slot {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.player-slot input[type="text"] {
+  background: #2a2a3e;
+  border: 1px solid #444;
+  color: #e0d8c8;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+#btn-start {
+  padding: 10px 32px;
+  font-size: 1.1rem;
+  background: #ffd700;
+  color: #1a1a2e;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: bold;
+}
+#btn-start:hover { background: #ffe44d; }
+
+/* ── Game layout ─────────────────────────────────────────────────────────── */
+#screen-game.active {
+  flex-direction: row !important;
+  align-items: stretch;
+}
+
+#layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Left panel ──────────────────────────────────────────────────────────── */
+#panel-left {
+  width: 180px;
+  min-width: 180px;
+  background: #16213e;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  border-right: 1px solid #333;
+}
+
+#player-name-display { font-size: 1.1rem; font-weight: bold; color: #ffd700; }
+#hearts-display      { font-size: 1rem; letter-spacing: 1px; }
+#coins-display       { color: #ffd700; }
+#turn-info           { color: #aaa; font-style: italic; font-size: 0.85rem; }
+
+.stats-table { width: 100%; border-collapse: collapse; }
+.stats-table td { padding: 2px 4px; }
+.stats-table td:first-child { color: #aaa; width: 36px; }
+.bonus { color: #6abf69; }
+.malus { color: #e05050; }
+
+.equipped-grid { display: flex; flex-direction: column; gap: 2px; }
+.equip-slot    { display: flex; gap: 6px; font-size: 0.8rem; align-items: center; }
+.slot-icon     { width: 16px; text-align: center; }
+.slot-item     { color: #c8b8a0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.action-btn {
+  padding: 8px;
+  background: #ffd700;
+  color: #1a1a2e;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  width: 100%;
+}
+.action-btn:disabled { background: #555; color: #888; cursor: default; }
+.action-btn:not(:disabled):hover { background: #ffe44d; }
+
+/* ── Map canvas ──────────────────────────────────────────────────────────── */
+#map-container {
+  flex: 1;
+  overflow: auto;
+  background: #0f0f1a;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 8px;
+}
+
+#map-canvas { cursor: pointer; image-rendering: pixelated; }
+
+/* ── Right panel ─────────────────────────────────────────────────────────── */
+#panel-right {
+  width: 200px;
+  min-width: 200px;
+  background: #16213e;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  border-left: 1px solid #333;
+}
+
+#panel-right h3 { color: #ffd700; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px; }
+
+#inventory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.inv-item {
+  padding: 3px 6px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 3px;
+  font-size: 0.8rem;
+  cursor: default;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inv-item:hover { background: rgba(255,255,255,0.1); }
+
+/* ── Legend ──────────────────────────────────────────────────────────────── */
+#legend-display { flex-shrink: 0; }
+
+#legend-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 4px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.legend-swatch {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.legend-label { color: #c8b8a0; }
+
+#log-list {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.log-entry { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.05); color: #b8b0a0; }
+
+/* ── Overlay & modals ────────────────────────────────────────────────────── */
+#overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+#overlay.hidden { display: none; }
+
+.modal {
+  background: #1e2a3e;
+  border: 1px solid #ffd700;
+  border-radius: 8px;
+  padding: 24px;
+  min-width: 320px;
+  max-width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.modal.hidden { display: none; }
+.modal h2    { color: #ffd700; font-size: 1.3rem; border-bottom: 1px solid #444; padding-bottom: 8px; }
+.modal h3    { color: #c8b8a0; font-size: 0.95rem; margin-top: 4px; }
+.modal h4    { color: #aaa; font-size: 0.85rem; }
+
+/* Combat modal — two-column layout */
+#modal-combat { max-width: 740px; min-width: 560px; }
+
+#combat-layout {
+  display: flex;
+  gap: 14px;
+  min-height: 320px;
+}
+
+#combat-left {
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#combat-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#combat-enemy-info, #combat-player-info {
+  background: rgba(255,255,255,0.05);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.88rem;
+}
+
+#combat-log {
+  flex: 1;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.78rem;
+  background: rgba(0,0,0,0.2);
+  padding: 6px;
+  border-radius: 4px;
+  line-height: 1.6;
+}
+
+#combat-consumables h4 { color: #aaa; font-size: 0.8rem; margin-bottom: 4px; }
+
+#combat-consumable-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.combat-consumable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  background: rgba(255,255,255,0.07);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 0.78rem;
+  color: #c8b8a0;
+}
+
+#combat-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+.attack-btn, #btn-bail {
+  padding: 7px 12px;
+  border: 1px solid #555;
+  background: #2a3a50;
+  color: #e0d8c8;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.attack-btn:hover:not(:disabled), #btn-bail:hover:not(:disabled) { background: #3a4a60; border-color: #ffd700; }
+.attack-btn:disabled, #btn-bail:disabled { opacity: 0.4; cursor: default; }
+
+/* Shop two-column layout */
+#modal-shop { max-width: 900px; min-width: 600px; }
+
+#shop-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+
+#shop-buy-col, #shop-sell-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#shop-buy-col h3, #shop-sell-col h3 {
+  color: #c8b8a0;
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #333;
+}
+
+#shop-buy-list, #shop-sell-list {
+  overflow-y: auto;
+  max-height: 55vh;
+}
+
+/* Equipment management popup */
+#modal-inventory { max-width: 460px; }
+
+#btn-close-inventory {
+  padding: 4px 10px;
+  background: #ffd700;
+  color: #1a1a2e;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: bold;
+  align-self: flex-start;
+}
+#btn-close-inventory:hover { background: #ffe44d; }
+
+/* Inventory manage button in left panel */
+.inv-manage-btn {
+  padding: 5px 8px;
+  background: #2a3a50;
+  color: #ffd700;
+  border: 1px solid #555;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  width: 100%;
+}
+.inv-manage-btn:hover { background: #3a4a60; border-color: #ffd700; }
+
+.inv-slot-section {
+  border-bottom: 1px solid #2a2a3e;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+.inv-slot-section:last-child { border-bottom: none; margin-bottom: 0; }
+
+.inv-slot-header {
+  color: #ffd700;
+  font-size: 0.8rem;
+  font-weight: bold;
+  margin-bottom: 3px;
+}
+
+.inv-slot-equipped {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 6px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+  margin-bottom: 2px;
+  font-size: 0.82rem;
+}
+
+.inv-slot-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 6px 2px 14px;
+  font-size: 0.78rem;
+  color: #a0a0b0;
+  margin-bottom: 1px;
+}
+
+.enchanted-item { color: #c9a0ff; }
+
+/* Shop */
+.shop-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.shop-item span:first-child { flex: 1; }
+.shop-item.too-expensive    { opacity: 0.45; }
+
+.shop-item button, .close-btn, #btn-open-chest, #btn-priest-roll, #btn-restart {
+  padding: 4px 10px;
+  background: #ffd700;
+  color: #1a1a2e;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+.shop-item button:hover:not(:disabled), .close-btn:hover, #btn-open-chest:hover,
+#btn-priest-roll:hover, #btn-restart:hover { background: #ffe44d; }
+.shop-item button:disabled { background: #555; color: #888; cursor: default; }
+
+#btn-restart { font-size: 1rem; padding: 8px 24px; align-self: center; }
+
+/* Spell / bard pickers */
+#spell-picker, #bard-picker {
+  background: rgba(0,0,0,0.2);
+  padding: 8px;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#spell-picker button, #bard-picker button {
+  padding: 5px 8px;
+  background: #2a3a50;
+  color: #e0d8c8;
+  border: 1px solid #555;
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: left;
+}
+#spell-picker button:hover, #bard-picker button:hover { background: #3a4a60; }
+
+/* Master */
+#master-skills button, #master-enchant button {
+  display: block;
+  width: 100%;
+  margin: 3px 0;
+  padding: 5px 8px;
+  background: #2a3a50;
+  color: #e0d8c8;
+  border: 1px solid #555;
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: left;
+}
+#master-skills button:hover:not(:disabled),
+#master-enchant button:hover:not(:disabled) { background: #3a4a60; border-color: #ffd700; }
+#master-skills button:disabled,
+#master-enchant button:disabled { opacity: 0.4; cursor: default; }
+
+/* Inventory equip/unequip buttons */
+.inv-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  white-space: normal;
+  overflow: visible;
+}
+.inv-equip-btn {
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding: 2px 6px;
+  background: #2a3a50;
+  color: #ffd700;
+  border: 1px solid #555;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.72rem;
+}
+.inv-equip-btn:hover:not(:disabled) { background: #3a4a60; border-color: #ffd700; }
+.inv-equip-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* Combat info */
+.combat-hearts  { font-size: 1rem; margin: 4px 0; }
+.combat-equipped { font-size: 0.78rem; color: #aaa; margin-top: 4px; }
+
+/* Loot confirm modal */
+#loot-description {
+  font-size: 1.1rem;
+  text-align: center;
+  padding: 16px 8px;
+  color: #ffd700;
+}
+#btn-loot-confirm {
+  padding: 8px 24px;
+  background: #ffd700;
+  color: #1a1a2e;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 1rem;
+  align-self: center;
+}
+#btn-loot-confirm:hover { background: #ffe44d; }
+
+/* Other players sidebar */
+.other-players-header {
+  color: #aaa;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin: 6px 0 4px;
+}
+
+.other-player-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 6px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 3px;
+}
+.other-player-card:hover { background: rgba(255,255,255,0.12); }
+
+.other-player-name   { color: #ffd700; font-weight: bold; font-size: 0.82rem; }
+.other-player-hearts { font-size: 0.72rem; }
+.other-player-coins  { color: #ffd700; font-size: 0.72rem; }
+
+/* Scrollbars */
+::-webkit-scrollbar       { width: 6px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }

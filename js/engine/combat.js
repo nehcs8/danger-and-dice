@@ -1,0 +1,622 @@
+const Combat = (() => {
+  const ATTACK_TYPES = ['F','D','M','C'];
+  const DEFENSE_FOR  = { F:'A', D:'V', M:'M', C:'C' };
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  // Mob attack/defense roll: base (stat − 3) + d6. Base can be negative.
+  function mobRoll(mob, stat) {
+    return getMobStat(mob, stat) - 3 + Dice.d6();
+  }
+
+  // Which player stat key is actually used to defend against attackType.
+  function playerDefStatKey(player, attackType) {
+    if (attackType === 'M' && player.hasEnchantment('arcane')) return 'A';
+    return DEFENSE_FOR[attackType];
+  }
+
+  function mobHighestAttack(mob) {
+    const maxVal = Math.max(...ATTACK_TYPES.map(s => getMobStat(mob, s)));
+    const tied   = ATTACK_TYPES.filter(s => getMobStat(mob, s) === maxVal);
+    return tied[Math.floor(Math.random() * tied.length)];
+  }
+
+  function applyEffect(effect, target, log) {
+    if (!effect) return;
+    switch (effect.type) {
+      case 'fire':
+        target.statusEffects.push({ type:'fire', turnsLeft: effect.n });
+        log.push(`${targetName(target)} is burning (${effect.n} turns)`);
+        break;
+      case 'ice':
+        target.statusEffects.push({ type:'malus', stat:'V', value:-effect.n, turnsLeft:999 });
+        log.push(`${targetName(target)} is slowed (−${effect.n}V)`);
+        break;
+      case 'lightning':
+        target.statusEffects.push({ type:'lightning', turnsLeft:1 });
+        log.push(`${targetName(target)} is stunned (must roll >3 next attack)`);
+        break;
+      case 'explosion':
+        target.statusEffects.push({ type:'malus', stat:'A', value:-effect.n, turnsLeft:999 });
+        log.push(`${targetName(target)} armor reduced (−${effect.n}A)`);
+        break;
+    }
+  }
+
+  function checkLightningBlock(entity, log) {
+    const idx = entity.statusEffects.findIndex(e => e.type === 'lightning');
+    if (idx === -1) return false;
+    entity.statusEffects.splice(idx, 1);
+    const roll = Dice.d6();
+    if (roll <= 3) {
+      log.push(`${targetName(entity)} is paralysed (rolled ${roll}) — cannot act`);
+      return true;
+    }
+    log.push(`${targetName(entity)} breaks through paralysis (rolled ${roll})`);
+    return false;
+  }
+
+  function processFire(entity, log) {
+    let dmg = 0;
+    entity.statusEffects = entity.statusEffects.map(e => {
+      if (e.type !== 'fire') return e;
+      const updated = { ...e, turnsLeft: e.turnsLeft - 1 };
+      if (updated.turnsLeft <= 0) dmg++;
+      return updated;
+    }).filter(e => !(e.type === 'fire' && e.turnsLeft <= 0));
+    if (dmg > 0) log.push(`${targetName(entity)} takes ${dmg} fire damage`);
+    return dmg;
+  }
+
+  function mobTickEffects(mob) {
+    mob.statusEffects = (mob.statusEffects ?? [])
+      .map(e => ({ ...e, turnsLeft: e.turnsLeft - 1 }))
+      .filter(e => e.turnsLeft > 0);
+  }
+
+  function getMobStat(mob, stat) {
+    let v = mob.stats[stat] ?? 0;
+    for (const e of (mob.statusEffects ?? [])) {
+      if (e.stat === stat) v += e.value;
+    }
+    return Math.max(0, v);
+  }
+
+  function targetName(e) { return e.name ?? e.id ?? '?'; }
+
+  // ── Loot ──────────────────────────────────────────────────────────────────
+
+  function resolveLoot(player, mob) {
+    let coins = mob.coins ?? 0;
+    if (mob.coinDice) for (let i = 0; i < mob.coinDice; i++) coins += Dice.d6();
+    if (player.hasEquipped('big_knife'))    coins += 3;
+    if (player.hasEquipped('small_pistol')) coins *= 3;
+    if (player.hasEnchantment('plunder'))   coins += 5;
+
+    const STAT_KEYS = ['F','D','A','M','C','V'];
+    const qtyMult = player.hasEquipped('bottomless_bag') ? 2 : 1;
+    const items = [];
+    for (const entry of (mob.lootTable ?? [])) {
+      if (entry.rollForStat) {
+        const stat  = STAT_KEYS[Dice.d6() - 1];
+        const potId = `pot_${stat}${entry.potionValue ?? 3}`;
+        const qty   = (entry.count ?? 1) * qtyMult;
+        for (let i = 0; i < qty; i++) items.push(potId);
+      } else {
+        const qty = (entry.count ?? 1) * qtyMult;
+        for (let i = 0; i < qty; i++) items.push(entry.itemId);
+      }
+    }
+    return { items, coins };
+  }
+
+  // ── Enchantment effects on hit ────────────────────────────────────────────
+
+  function applyEnchantmentsOnHit(player, mob, log) {
+    if (player.hasEnchantment('fury')) {
+      const tier = player.getEnchantmentTier('fury');
+      mob.stats.A = Math.max(0, mob.stats.A - tier);
+      log.push(`Fury: ${targetName(mob)} loses ${tier}A`);
+    }
+    if (player.hasEnchantment('hawk_eye')) {
+      const tier = player.getEnchantmentTier('hawk_eye');
+      mob.stats.V = Math.max(0, mob.stats.V - tier);
+      log.push(`Hawk Eye: ${targetName(mob)} loses ${tier}V`);
+    }
+    if (player.hasEnchantment('flame')) {
+      mob.statusEffects = mob.statusEffects ?? [];
+      mob.statusEffects.push({ type:'fire', turnsLeft:1 });
+      log.push(`Flame: ${targetName(mob)} will burn next turn`);
+    }
+  }
+
+  // ── Charisma action ───────────────────────────────────────────────────────
+
+  function sampleMobLoot(mob) {
+    const STAT_KEYS = ['F','D','A','M','C','V'];
+    const items = [];
+    for (const entry of (mob.lootTable ?? [])) {
+      if (entry.rollForStat) {
+        const stat = STAT_KEYS[Dice.d6() - 1];
+        items.push(`pot_${stat}${entry.potionValue ?? 3}`);
+      } else {
+        items.push(entry.itemId);
+      }
+    }
+    return { items, coins: mob.coins ?? 0 };
+  }
+
+  function resolveCharismaRoll(player, mob, log) {
+    const playerRoll = player.getStat('C') + Dice.d6();
+    const mobC       = getMobStat(mob, 'C');
+    const diff       = playerRoll - mobC;
+    const sign       = diff >= 0 ? '+' : '';
+    log.push(`Charisma: ${player.name} rolls C+d6=${playerRoll} vs ${targetName(mob)} C=${mobC} → ${sign}${diff}`);
+    return { diff, playerRoll, mobC, pendingLoot: sampleMobLoot(mob) };
+  }
+
+  function generateQuest() {
+    const types       = ['kill','mock','deceive','befriend','respect'];
+    const targetTypes = ['mob','mob','mob','boss'];
+    const type        = types[Math.floor(Math.random() * types.length)];
+    const targetType  = targetTypes[Math.floor(Math.random() * targetTypes.length)];
+    const count       = targetType === 'boss' ? 1 : (Dice.d6() <= 3 ? 1 : Dice.d6() <= 4 ? 2 : 3);
+    return { type, targetType, count, progress: 0, id: Date.now() };
+  }
+
+  function questDescription(quest) {
+    const t = quest.targetType === 'boss' ? 'a boss' : `${quest.count} mob${quest.count > 1 ? 's' : ''}`;
+    return `${quest.type} ${t}`;
+  }
+
+  function applyCharismaOutcome(player, mob, action, charismaResult, log) {
+    const { family, tier } = action;
+    switch (`${family}:${tier}`) {
+
+      case 'friendly:1': {
+        const loot = charismaResult.pendingLoot;
+        if (loot.items.length) {
+          const itemId = loot.items[Math.floor(Math.random() * loot.items.length)];
+          player.addItem(itemId);
+          log.push(`${targetName(mob)} gifts ${getItem(itemId)?.name ?? itemId}!`);
+        } else {
+          log.push(`${targetName(mob)} has nothing to give.`);
+        }
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'charisma_end' };
+      }
+
+      case 'friendly:2': {
+        player.healHeart(1);
+        log.push(`${player.name} +1 ❤ (${player.hearts.current}/${player.hearts.max})`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'charisma_end' };
+      }
+
+      case 'friendly:3': {
+        player.friendsList.push({
+          uid: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+          id: mob.id, name: mob.name,
+          hearts: { current: mob.hearts.current, max: mob.hearts.max },
+          stats: { ...mob.stats }, lootTable: mob.lootTable ?? [],
+          statusEffects: [],
+        });
+        log.push(`${targetName(mob)} joins your friends list!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'befriended' };
+      }
+
+      case 'mock:1': {
+        const { stat1, stat2 } = action;
+        const v1 = getMobStat(mob, stat1);
+        const v2 = getMobStat(mob, stat2);
+        const turns = Dice.d6();
+        mob.statusEffects = mob.statusEffects ?? [];
+        mob.statusEffects.push({ type: 'malus', stat: stat1, value: v2 - v1, turnsLeft: turns });
+        mob.statusEffects.push({ type: 'malus', stat: stat2, value: v1 - v2, turnsLeft: turns });
+        log.push(`${targetName(mob)}: ${stat1}↔${stat2} swapped for ${turns} turns`);
+        return { outcome: 'ongoing' };
+      }
+
+      case 'mock:2': {
+        const amount = Dice.d6();
+        const turns = Dice.d6();
+        mob.statusEffects = mob.statusEffects ?? [];
+        mob.statusEffects.push({ type: 'malus', stat: action.stat, value: -amount, turnsLeft: turns });
+        log.push(`${targetName(mob)} −${amount}${action.stat} for ${turns} turns`);
+        return { outcome: 'ongoing' };
+      }
+
+      case 'mock:3': {
+        const amount = Dice.d6();
+        const turns = Dice.d6();
+        player.statusEffects.push({ type: 'bonus', stat: action.stat, value: amount, turnsLeft: turns });
+        log.push(`${player.name} +${amount}${action.stat} for ${turns} turns`);
+        return { outcome: 'ongoing' };
+      }
+
+      case 'deceive:1': {
+        const coins = Dice.d6() * 3;
+        player.coins += coins;
+        log.push(`${player.name} steals ${coins} coins and flees!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'charisma_end', coinsChanged: true };
+      }
+
+      case 'deceive:2': {
+        const coins = Dice.d6() * 5;
+        player.coins += coins;
+        log.push(`${player.name} steals ${coins} coins and flees!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'charisma_end', coinsChanged: true };
+      }
+
+      case 'deceive:3': {
+        const coins = Dice.d6() * 8;
+        player.coins += coins;
+        log.push(`${player.name} pulls off a grand heist — steals ${coins} coins and flees!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'charisma_end', coinsChanged: true };
+      }
+
+      case 'respect:1': {
+        const { mobItemId, playerItemId } = action;
+        if (mobItemId) {
+          player.addItem(mobItemId);
+          log.push(`${player.name} receives ${getItem(mobItemId)?.name ?? mobItemId} from ${targetName(mob)}`);
+        }
+        if (playerItemId) {
+          player.removeItem(playerItemId);
+          log.push(`${player.name} gives ${getItem(playerItemId)?.name ?? playerItemId} to ${targetName(mob)}`);
+        }
+        if (!mobItemId && !playerItemId) log.push('No items exchanged.');
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'charisma_end' };
+      }
+
+      case 'respect:2': {
+        const quest = generateQuest();
+        player.quests.push(quest);
+        log.push(`Quest received: ${questDescription(quest)}`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'charisma_end' };
+      }
+
+      case 'respect:3': {
+        const upgradeable = ['F','D','A','M','C','V'].filter(s => player.baseStats[s] < 8);
+        if (upgradeable.length) {
+          const stat = upgradeable[Math.floor(Math.random() * upgradeable.length)];
+          player.baseStats[stat]++;
+          log.push(`${player.name} permanently gains +1 ${stat} (now ${player.baseStats[stat]})`);
+        } else {
+          log.push(`${player.name} has already mastered all skills!`);
+        }
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'charisma_end' };
+      }
+
+      default:
+        return { outcome: 'ongoing' };
+    }
+  }
+
+  // ── Kryss + initiative (no auto-attack) ───────────────────────────────────
+
+  function initFight(player, mob) {
+    const log = [];
+    mob.statusEffects = mob.statusEffects ?? [];
+
+    if (player.hasEquipped('kryss')) {
+      const roll = Dice.d6();
+      log.push(`Kryss: ${player.name} rolls ${roll}`);
+      if (roll > 3) {
+        mob.hearts.current--;
+        log.push(`Hit! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+        if (mob.hearts.current <= 0) {
+          const loot = resolveLoot(player, mob);
+          player.clearFightEffects();
+          log.push(`${player.name} wins!`);
+          return { outcome: 'victory', loot, log };
+        }
+      }
+    }
+
+    const playerInit = player.getStat('V') + Dice.d6();
+    const mobInit    = getMobStat(mob, 'V'); // initiative uses flat mob V
+    const playerFirst = playerInit > mobInit;
+    log.push(`Initiative: ${player.name} ${playerInit} vs ${targetName(mob)} ${mobInit} → ${playerFirst ? player.name : targetName(mob)} goes first`);
+
+    return { outcome: 'ongoing', playerFirst, log };
+  }
+
+  // ── Player's attack half-turn ─────────────────────────────────────────────
+  // Player acts (attack / bail / bard), mob rolls to defend.
+
+  function takePlayerAttack(player, mob, action, fightLog) {
+    const newLog = [];
+
+    // Fire tick for player at start of their turn
+    const fpDmg = processFire(player, newLog);
+    if (fpDmg) {
+      player.takeDamage(fpDmg);
+      if (!player.isAlive) {
+        const droppedLoot = player.dropLoot();
+        player.clearFightEffects(); mob.statusEffects = [];
+        fightLog.push(...newLog);
+        return { outcome: 'defeat', droppedLoot, newLog };
+      }
+    }
+
+    if (action.type === 'bail') {
+      if (player.canEscape()) {
+        player.consumeEscape(action.method ?? null);
+        newLog.push(`${player.name} escapes!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        fightLog.push(...newLog);
+        return { outcome: 'escaped', newLog };
+      }
+      newLog.push(`Cannot escape!`);
+
+    } else if (!checkLightningBlock(player, newLog)) {
+
+      if (action.type === 'attack') {
+        const { attackType, spellId } = action;
+        const spell = spellId ? getItem(spellId) : null;
+
+        let attackRoll = player.getStat(attackType) + Dice.d6();
+        if (attackType === 'M' && spell?.magicValue) attackRoll += spell.magicValue;
+        player.consumeTempBonus(attackType);
+        if (spellId) player.removeItem(spellId);
+
+        const mobDefRoll = mobRoll(mob, DEFENSE_FOR[attackType]);
+        newLog.push(`${player.name} [${attackType}]: ${attackRoll} vs ${targetName(mob)} defends ${mobDefRoll}`);
+
+        if (attackRoll > mobDefRoll) {
+          mob.hearts.current--;
+          newLog.push(`Hit! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+          if (spell?.effect) applyEffect(spell.effect, mob, newLog);
+          applyEnchantmentsOnHit(player, mob, newLog);
+          if (mob.hearts.current <= 0) {
+            if (spell?.effect?.type === 'blood')    { player.healHeart(1); newLog.push(`Blood: ${player.name} +1 ❤`); }
+            if (player.hasEnchantment('bloodlust')) { player.healHeart(1); newLog.push(`Bloodlust: ${player.name} +1 ❤`); }
+            const loot = resolveLoot(player, mob);
+            newLog.push(`${player.name} wins!`);
+            player.clearFightEffects(); mob.statusEffects = [];
+            fightLog.push(...newLog);
+            return { outcome: 'victory', loot, newLog };
+          }
+        } else {
+          newLog.push(`Miss`);
+        }
+
+      } else if (action.type === 'bard') {
+        const charismaResult = resolveCharismaRoll(player, mob, newLog);
+        if (charismaResult.diff >= 1) {
+          fightLog.push(...newLog);
+          return { outcome: 'charisma_pending', charismaResult, newLog };
+        }
+        newLog.push(`Charisma failed — mob ignores you`);
+      }
+    }
+
+    fightLog.push(...newLog);
+    return { outcome: 'ongoing', newLog };
+  }
+
+  // ── Mob's attack half-turn ────────────────────────────────────────────────
+  // Mob rolls to attack, player rolls to defend.
+  // Status effects tick at end of this half (= end of full round).
+
+  function takeMobAttack(player, mob, fightLog, preRolledAtkType = null) {
+    const newLog = [];
+
+    // Fire tick for mob at start of their turn
+    const fmDmg = processFire(mob, newLog);
+    if (fmDmg) {
+      mob.hearts.current -= fmDmg;
+      if (mob.hearts.current <= 0) {
+        const loot = resolveLoot(player, mob);
+        newLog.push(`${targetName(mob)} burns to death!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        fightLog.push(...newLog);
+        return { outcome: 'victory', loot, newLog };
+      }
+    }
+
+    if (!checkLightningBlock(mob, newLog)) {
+      if (player.isSmokeActive) {
+        newLog.push(`${targetName(mob)} cannot attack — smoke screen`);
+      } else {
+        const atkType    = preRolledAtkType ?? mobHighestAttack(mob);
+        const mobAtkRoll = mobRoll(mob, atkType);
+        const defStatKey = playerDefStatKey(player, atkType);
+        const defRoll    = player.getDefenseStat(atkType) + Dice.d6();
+        player.consumeTempBonus(defStatKey);
+
+        newLog.push(`${targetName(mob)} [${atkType}]: ${mobAtkRoll} vs ${player.name} defends ${defRoll}`);
+
+        if (mobAtkRoll > defRoll) {
+          if (player.hasEnchantment('thorns') && Math.random() < 0.3) {
+            mob.hearts.current--;
+            newLog.push(`Thorns! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+            if (mob.hearts.current <= 0) {
+              const loot = resolveLoot(player, mob);
+              player.clearFightEffects(); mob.statusEffects = [];
+              fightLog.push(...newLog);
+              return { outcome: 'victory', loot, newLog };
+            }
+          } else {
+            player.takeDamage(1);
+            newLog.push(`Hit! ${player.name} ❤ ${player.hearts.current}/${player.hearts.max}`);
+            if (!player.isAlive) {
+              const droppedLoot = player.dropLoot();
+              player.clearFightEffects(); mob.statusEffects = [];
+              fightLog.push(...newLog);
+              return { outcome: 'defeat', droppedLoot, newLog };
+            }
+          }
+        } else {
+          newLog.push(`Miss`);
+        }
+      }
+    }
+
+    // Tick all status effects at end of full round
+    player.tickStatusEffects();
+    mobTickEffects(mob);
+
+    fightLog.push(...newLog);
+    return { outcome: 'ongoing', newLog };
+  }
+
+  // ── Legacy synchronous resolver (kept for reference, not called by game) ──
+
+  function resolve(player, mob, getPlayerAction) {
+    const log = [];
+    mob.statusEffects = mob.statusEffects ?? [];
+
+    if (player.hasEquipped('kryss')) {
+      const roll = Dice.d6();
+      log.push(`Kryss: ${player.name} rolls ${roll}`);
+      if (roll > 3) {
+        mob.hearts.current--;
+        log.push(`Kryss hits! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+        if (mob.hearts.current <= 0) {
+          const loot = resolveLoot(player, mob);
+          log.push(`${player.name} wins!`);
+          return { outcome:'victory', loot, log };
+        }
+      }
+    }
+
+    const playerInit = player.getStat('V') + Dice.d6();
+    const mobInit    = getMobStat(mob, 'V');
+    let playerTurn   = playerInit > mobInit;
+    log.push(`Initiative: ${player.name} ${playerInit} vs ${targetName(mob)} ${mobInit} → ${playerTurn ? player.name : targetName(mob)} goes first`);
+
+    while (player.isAlive && mob.hearts.current > 0) {
+      const fpDmg = processFire(player, log);
+      if (fpDmg) { player.takeDamage(fpDmg); if (!player.isAlive) break; }
+      const fmDmg = processFire(mob, log);
+      if (fmDmg) { mob.hearts.current -= fmDmg; if (mob.hearts.current <= 0) break; }
+
+      if (playerTurn) {
+        const action = getPlayerAction(player, mob, log);
+        if (action.type === 'bail') {
+          if (player.canEscape()) { player.consumeEscape(); log.push(`${player.name} escapes!`); player.clearFightEffects(); mob.statusEffects = []; return { outcome:'escaped', log }; }
+          log.push(`${player.name} cannot escape`);
+        } else if (action.type === 'attack' && !checkLightningBlock(player, log)) {
+          const { attackType, spellId } = action;
+          const spell = spellId ? getItem(spellId) : null;
+          let attackRoll = player.getStat(attackType) + Dice.d6();
+          if (attackType === 'M' && spell?.magicValue) attackRoll += spell.magicValue;
+          player.consumeTempBonus(attackType);
+          if (spellId) player.removeItem(spellId);
+          const mobDefRoll = mobRoll(mob, DEFENSE_FOR[attackType]);
+          log.push(`${player.name} [${attackType}]: ${attackRoll} vs ${targetName(mob)} ${mobDefRoll}`);
+          if (attackRoll > mobDefRoll) {
+            mob.hearts.current--;
+            log.push(`Hit! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+            if (spell?.effect) applyEffect(spell.effect, mob, log);
+            applyEnchantmentsOnHit(player, mob, log);
+            if (mob.hearts.current <= 0) {
+              if (spell?.effect?.type === 'blood')    { player.healHeart(1); }
+              if (player.hasEnchantment('bloodlust')) { player.healHeart(1); }
+              const loot = resolveLoot(player, mob);
+              log.push(`${player.name} wins!`);
+              return { outcome:'victory', loot, log };
+            }
+          } else { log.push(`Miss`); }
+        } else if (action.type === 'bard' && !checkLightningBlock(player, log)) {
+          resolveCharismaRoll(player, mob, log); // legacy path: roll only, no interactive outcome
+        }
+      } else {
+        if (!checkLightningBlock(mob, log) && !player.isSmokeActive) {
+          const atkType    = mobHighestAttack(mob);
+          const mobAtkRoll = mobRoll(mob, atkType);
+          const defRoll    = player.getDefenseStat(atkType) + Dice.d6();
+          player.consumeTempBonus(playerDefStatKey(player, atkType));
+          log.push(`${targetName(mob)} [${atkType}]: ${mobAtkRoll} vs ${player.name} ${defRoll}`);
+          if (mobAtkRoll > defRoll) {
+            if (player.hasEnchantment('thorns') && Math.random() < 0.3) {
+              mob.hearts.current--;
+              log.push(`Thorns! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+            } else {
+              player.takeDamage(1);
+              log.push(`Hit! ${player.name} ❤ ${player.hearts.current}/${player.hearts.max}`);
+            }
+          } else { log.push(`Miss`); }
+        }
+      }
+
+      playerTurn = !playerTurn;
+      player.tickStatusEffects();
+      mobTickEffects(mob);
+    }
+
+    const winner = player.isAlive ? 'player' : 'mob';
+    log.push(`Combat ends — ${winner} wins`);
+    player.clearFightEffects(); mob.statusEffects = [];
+    if (winner === 'player') { const loot = resolveLoot(player, mob); return { outcome:'victory', loot, log }; }
+    return { outcome:'defeat', droppedLoot: player.dropLoot(), log };
+  }
+
+  // ── Deployed-friend combat round ─────────────────────────────────────────
+  // Both friend and mob use the mob formula: stat − 3 + d6.
+  // Player enchantments do not apply mid-round (friend has no equipment),
+  // but Bloodlust and resolveLoot bonuses still go to the player on kill.
+
+  function resolveFriendRound(friend, mob, player, fightLog) {
+    const newLog = [];
+
+    // Friend attacks (picks its highest stat)
+    const fAtkType  = mobHighestAttack(friend);
+    const fAtkRoll  = getMobStat(friend, fAtkType) - 3 + Dice.d6();
+    const mDefRoll  = mobRoll(mob, DEFENSE_FOR[fAtkType]);
+    newLog.push(`${friend.name} [${fAtkType}]: ${fAtkRoll} vs ${targetName(mob)} defends ${mDefRoll}`);
+
+    if (fAtkRoll > mDefRoll) {
+      mob.hearts.current--;
+      newLog.push(`Hit! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+      if (mob.hearts.current <= 0) {
+        if (player.hasEnchantment('bloodlust')) {
+          player.healHeart(1);
+          newLog.push(`Bloodlust: ${player.name} +1 ❤`);
+        }
+        const loot = resolveLoot(player, mob);
+        newLog.push(`${friend.name} defeats ${targetName(mob)}!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        fightLog.push(...newLog);
+        return { outcome: 'victory', loot, newLog };
+      }
+    } else {
+      newLog.push('Miss');
+    }
+
+    // Mob attacks friend
+    const mAtkType  = mobHighestAttack(mob);
+    const mAtkRoll  = mobRoll(mob, mAtkType);
+    const fDefStat  = DEFENSE_FOR[mAtkType];
+    const fDefRoll  = (friend.stats[fDefStat] ?? 0) - 3 + Dice.d6();
+    newLog.push(`${targetName(mob)} [${mAtkType}]: ${mAtkRoll} vs ${friend.name} defends ${fDefRoll}`);
+
+    if (mAtkRoll > fDefRoll) {
+      friend.hearts.current--;
+      newLog.push(`Hit! ${friend.name} ❤ ${friend.hearts.current}/${friend.hearts.max}`);
+      if (friend.hearts.current <= 0) {
+        newLog.push(`${friend.name} has fallen!`);
+        fightLog.push(...newLog);
+        return { outcome: 'friend_died', newLog };
+      }
+    } else {
+      newLog.push('Miss');
+    }
+
+    mobTickEffects(mob);
+    fightLog.push(...newLog);
+    return { outcome: 'ongoing', newLog };
+  }
+
+  return { resolve, initFight, takePlayerAttack, takeMobAttack, rollMobAttack: mobHighestAttack,
+           resolveCharismaRoll, applyCharismaOutcome, questDescription, resolveFriendRound };
+})();

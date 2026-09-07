@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Danger &amp; Dice</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <div id="app">
+
+    <!-- ── Setup screen ─────────────────────────────────────── -->
+    <div id="screen-setup" class="screen active">
+      <h1>Danger &amp; Dice</h1>
+      <div id="player-slots">
+        <div class="player-slot">
+          <label>Player 1 <input type="text" class="player-name" value="Player 1"></label>
+          <label><input type="checkbox" class="player-bot"> Bot</label>
+        </div>
+        <div class="player-slot optional">
+          <label><input type="checkbox" class="player-active"> Player 2 <input type="text" class="player-name" value="Player 2" disabled></label>
+          <label><input type="checkbox" class="player-bot" disabled> Bot</label>
+        </div>
+        <div class="player-slot optional">
+          <label><input type="checkbox" class="player-active"> Player 3 <input type="text" class="player-name" value="Player 3" disabled></label>
+          <label><input type="checkbox" class="player-bot" disabled> Bot</label>
+        </div>
+        <div class="player-slot optional">
+          <label><input type="checkbox" class="player-active"> Player 4 <input type="text" class="player-name" value="Player 4" disabled></label>
+          <label><input type="checkbox" class="player-bot" disabled> Bot</label>
+        </div>
+      </div>
+      <button id="btn-start">Start Game</button>
+    </div>
+
+    <!-- ── Main game screen ─────────────────────────────────── -->
+    <div id="screen-game" class="screen">
+
+      <div id="layout">
+
+        <!-- Left panel: current player stats -->
+        <div id="panel-left">
+          <div id="player-info">
+            <div id="player-name-display"></div>
+            <div id="hearts-display"></div>
+            <div id="coins-display"></div>
+          </div>
+          <div id="stats-display"></div>
+          <div id="equipped-display"></div>
+          <button id="btn-open-inventory" class="inv-manage-btn">⚔ Manage Equipment</button>
+          <div id="turn-info"></div>
+          <button id="btn-roll" class="action-btn">Roll Movement</button>
+          <div id="other-players-display"></div>
+        </div>
+
+        <!-- Centre: map canvas -->
+        <div id="map-container">
+          <canvas id="map-canvas"></canvas>
+        </div>
+
+        <!-- Right panel: legend + inventory + log -->
+        <div id="panel-right">
+          <div id="legend-display">
+            <h3>Legend</h3>
+            <div id="legend-list"></div>
+          </div>
+          <div id="inventory-display">
+            <h3>Inventory</h3>
+            <div id="inventory-list"></div>
+          </div>
+          <div id="log-display">
+            <h3>Log</h3>
+            <div id="log-list"></div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ── Overlay modals ────────────────────────────────────── -->
+    <div id="overlay" class="hidden">
+
+      <!-- Setup roll modal -->
+      <div id="modal-setup-roll" class="modal hidden">
+        <h2>Character Setup</h2>
+        <p id="setup-roll-who"></p>
+        <div id="setup-roll-result"></div>
+        <button id="btn-setup-roll">🎲 Roll Stats &amp; Starting Item</button>
+      </div>
+
+      <!-- Combat modal -->
+      <div id="modal-combat" class="modal hidden">
+        <h2>Combat</h2>
+        <div id="combat-layout">
+
+          <!-- Left: enemy + log -->
+          <div id="combat-left">
+            <div id="combat-enemy-info"></div>
+            <div id="combat-log"></div>
+          </div>
+
+          <!-- Right: player + consumables + actions -->
+          <div id="combat-right">
+            <div id="combat-player-info"></div>
+            <div id="combat-consumables">
+              <h4>Use Item</h4>
+              <div id="combat-consumable-list"></div>
+            </div>
+            <div id="combat-actions">
+              <div id="combat-phase-label" style="color:#ffd700;font-weight:bold;font-size:0.85em;margin-bottom:4px;letter-spacing:1px">YOUR ATTACK</div>
+              <div id="combat-attack-buttons">
+                <button class="attack-btn" data-type="F">⚔ STR</button>
+                <button class="attack-btn" data-type="D">🏹 DEX</button>
+                <button class="attack-btn" data-type="M">✨ MAG</button>
+                <button class="attack-btn" data-type="C">🎵 CHA</button>
+                <button id="btn-bail">🪢 Bail</button>
+                <button id="btn-deploy-friend" class="hidden" style="width:100%;padding:4px;margin-top:3px;background:#1a4a6a;color:#7df;border:1px solid #7df;border-radius:4px;cursor:pointer;font-size:0.85em">👥 Deploy Friend</button>
+              </div>
+              <div id="combat-defend-buttons" class="hidden">
+                <button id="btn-defend" style="width:100%;padding:8px;background:#2a3a5a;color:#7af;border:1px solid #7af;border-radius:4px;cursor:pointer;font-size:1em">🛡 Roll Defense</button>
+              </div>
+            </div>
+            <div id="spell-picker" class="hidden">
+              <h4>Choose spell:</h4>
+              <div id="spell-list"></div>
+            </div>
+            <div id="charisma-picker" class="hidden">
+              <div id="charisma-roll-result" style="color:#ffd700;font-weight:bold;font-size:0.85em;margin-bottom:5px"></div>
+              <div id="charisma-options"></div>
+              <div id="charisma-sub-swap" class="hidden" style="background:#1a1a3a;border:1px solid #8a3a8a;border-radius:3px;padding:4px;margin-top:4px">
+                <div id="charisma-swap-title" style="font-size:0.78em;color:#c8c;margin-bottom:3px">Swap which mob stat first?</div>
+                <div id="charisma-swap-list" style="display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin-bottom:4px"></div>
+                <button id="btn-charisma-swap-cancel" style="font-size:0.75em;padding:2px 6px;background:#555;color:#fff;border:none;border-radius:3px;cursor:pointer">Cancel</button>
+              </div>
+              <div id="charisma-sub-stat" class="hidden" style="background:#1a1a3a;border:1px solid #8a3a8a;border-radius:3px;padding:4px;margin-top:4px">
+                <div id="charisma-stat-title" style="font-size:0.78em;color:#c8c;margin-bottom:3px">Choose a stat:</div>
+                <div id="charisma-stat-list" style="display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin-bottom:4px"></div>
+                <button id="btn-charisma-stat-cancel" style="font-size:0.75em;padding:2px 6px;background:#555;color:#fff;border:none;border-radius:3px;cursor:pointer">Cancel</button>
+              </div>
+              <div id="charisma-sub-trade" class="hidden" style="background:#1a1a3a;border:1px solid #006a8a;border-radius:3px;padding:4px;margin-top:4px">
+                <div style="font-size:0.78em;color:#6af;margin-bottom:3px">Trade items:</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:4px">
+                  <div>
+                    <div style="font-size:0.72em;color:#aaa;margin-bottom:2px">Enemy offers:</div>
+                    <div id="charisma-trade-mob-list"></div>
+                  </div>
+                  <div>
+                    <div style="font-size:0.72em;color:#aaa;margin-bottom:2px">You give:</div>
+                    <div id="charisma-trade-player-list"></div>
+                  </div>
+                </div>
+                <div style="display:flex;gap:4px">
+                  <button id="btn-charisma-trade-confirm" style="flex:1;font-size:0.75em;padding:3px;background:#2a7a2a;color:#fff;border:none;border-radius:3px;cursor:pointer">Confirm</button>
+                  <button id="btn-charisma-trade-cancel" style="font-size:0.75em;padding:3px;background:#555;color:#fff;border:none;border-radius:3px;cursor:pointer">Cancel</button>
+                </div>
+              </div>
+            </div>
+            <div id="bail-picker" class="hidden">
+              <h4>Escape using:</h4>
+              <div id="bail-picker-list" style="display:flex;flex-direction:column;gap:4px"></div>
+            </div>
+            <div id="friend-picker" class="hidden" style="border:1px solid #7df;border-radius:4px;padding:4px;margin-top:4px">
+              <div style="color:#7df;font-size:0.8em;font-weight:bold;margin-bottom:3px">Deploy which friend?</div>
+              <div id="friend-list" style="display:flex;flex-direction:column;gap:3px"></div>
+              <button id="btn-friend-picker-cancel" style="margin-top:4px;font-size:0.75em;padding:2px 8px;background:#555;color:#fff;border:none;border-radius:3px;cursor:pointer">Cancel</button>
+            </div>
+            <div id="friend-fighting-ui" class="hidden" style="border:1px solid #7df;border-radius:4px;padding:4px;margin-top:4px">
+              <div id="deployed-friend-status" style="color:#7df;font-size:0.82em;margin-bottom:4px"></div>
+              <button id="btn-friend-next-round" style="width:100%;padding:5px;background:#1a4a6a;color:#7df;border:1px solid #7df;border-radius:4px;cursor:pointer;font-size:0.9em">▶ Next Round</button>
+            </div>
+            <div id="friend-defeat-ui" class="hidden" style="border:1px solid #f66;border-radius:4px;padding:4px;margin-top:4px">
+              <div style="color:#f66;font-size:0.82em;margin-bottom:4px">▼ Friend defeated!</div>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <button id="btn-friend-take-over" style="padding:5px;background:#2a2a5a;color:#fff;border:1px solid #aaf;border-radius:4px;cursor:pointer;font-size:0.85em">⚔ Take Over Fight</button>
+                <button id="btn-friend-deploy-next" class="hidden" style="padding:5px;background:#1a4a6a;color:#7df;border:1px solid #7df;border-radius:4px;cursor:pointer;font-size:0.85em">👥 Deploy Another Friend</button>
+              </div>
+            </div>
+            <div id="transmutation-picker" class="hidden">
+              <h4 id="transmutation-picker-title">Transmutation: pick first stat</h4>
+              <div id="transmutation-stat-list" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:6px"></div>
+              <button id="btn-transmutation-cancel" style="padding:4px 10px;background:#555;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85em">Cancel</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Shop modal -->
+      <div id="modal-shop" class="modal hidden">
+        <h2>Shop</h2>
+        <div id="shop-layout">
+          <div id="shop-buy-col">
+            <h3>Buy</h3>
+            <div id="shop-buy-list"></div>
+          </div>
+          <div id="shop-sell-col">
+            <h3>Sell</h3>
+            <div id="shop-sell-list"></div>
+          </div>
+        </div>
+        <button class="close-btn">Close</button>
+      </div>
+
+      <!-- Master modal -->
+      <div id="modal-master" class="modal hidden">
+        <h2>Master</h2>
+        <div id="master-skills"></div>
+        <hr>
+        <div id="master-enchant"></div>
+        <hr>
+        <div id="master-buy-list"></div>
+        <button class="close-btn">Close</button>
+      </div>
+
+      <!-- Chest modal -->
+      <!-- Priest modal -->
+      <div id="modal-priest" class="modal hidden">
+        <h2>Priest</h2>
+        <div id="priest-result"></div>
+        <button id="btn-priest-roll">Pray</button>
+      </div>
+
+      <!-- Map choice modal -->
+      <div id="modal-map" class="modal hidden">
+        <h2>Use Map</h2>
+        <p id="map-choice-hint" style="margin:4px 0 10px;color:#aaa;font-size:0.85em"></p>
+        <div id="map-choice-buttons" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px"></div>
+        <button id="btn-map-skip" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer">Roll Normally</button>
+      </div>
+
+      <!-- Loot confirm modal -->
+      <div id="modal-loot" class="modal hidden">
+        <h2>Loot</h2>
+        <div id="loot-description"></div>
+        <button id="btn-loot-confirm">Continue</button>
+      </div>
+
+      <!-- Player info modal (other players) -->
+      <div id="modal-player-info" class="modal hidden">
+        <h2 id="modal-player-info-name">Player</h2>
+        <div id="modal-player-info-content"></div>
+        <button onclick="HUD.closePlayerInfo()" style="padding:4px 10px;background:#ffd700;color:#1a1a2e;border:none;border-radius:3px;cursor:pointer;font-weight:bold;align-self:flex-start">Close</button>
+      </div>
+
+      <!-- Teleport modal -->
+      <div id="modal-teleport" class="modal hidden">
+        <h2>Teleport</h2>
+        <p style="color:#aaa;font-size:0.85em;margin:4px 0 10px">Choose your destination:</p>
+        <div id="teleport-dest-list" style="display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;margin-bottom:10px"></div>
+        <button id="btn-teleport-cancel" style="padding:6px 14px;background:#555;color:#fff;border:none;border-radius:4px;cursor:pointer">Cancel</button>
+      </div>
+
+      <!-- Equipment management modal -->
+      <div id="modal-inventory" class="modal hidden">
+        <h2>Equipment</h2>
+        <div id="inventory-slots-list"></div>
+        <button id="btn-close-inventory">Close</button>
+      </div>
+
+      <!-- Game over modal -->
+      <div id="modal-gameover" class="modal hidden">
+        <h2>Game Over</h2>
+        <div id="gameover-message"></div>
+        <button id="btn-restart">Play Again</button>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- ── Scripts — order matters (no modules, global scope) ── -->
+  <script src="js/engine/dice.js"></script>
+  <script src="js/data/items.js"></script>
+  <script src="js/data/mobs.js"></script>
+  <script src="js/data/map.js"></script>
+  <script src="js/engine/player.js"></script>
+  <script src="js/engine/movement.js"></script>
+  <script src="js/engine/combat.js"></script>
+  <script src="js/engine/game.js"></script>
+  <script src="js/engine/bot.js"></script>
+  <script src="js/ui/renderer.js"></script>
+  <script src="js/ui/hud.js"></script>
+  <script src="js/ui/panels.js"></script>
+  <script src="js/main.js"></script>
+
+</body>
+</html>
