@@ -32,6 +32,7 @@ const Game = (() => {
     currentIdx:       0,
     setupRollIdx:     0,
     turnNumber:       0,
+    difficulty:       'medium',
     movementCap:      0,
     reachableTiles:   null,   // Map<"x,y", steps> from Movement
     stopBlockedTiles: null,   // Set<"x,y"> tiles reachable only through an uncleared STOP
@@ -145,6 +146,29 @@ const Game = (() => {
     return bestTier;
   }
 
+  function calcInventoryWeight(player) {
+    let w = 0;
+    for (const slot of ALL_SLOTS) {
+      const item = player.equipped[slot];
+      if (!item) continue;
+      const bonus = item.statBonus ?? {};
+      const sw = Object.values(bonus).reduce((s, v) => s + Math.abs(v), 0);
+      w += sw || 1;
+    }
+    for (const id of player.inventory) {
+      const item = getItem(id);
+      if (!item) { w += 1; continue; }
+      if (item.slot) {
+        const bonus = item.statBonus ?? {};
+        const sw = Object.values(bonus).reduce((s, v) => s + Math.abs(v), 0);
+        w += sw || 1;
+      } else {
+        w += 1; // consumables/potions/objects
+      }
+    }
+    return Math.max(1, w);
+  }
+
   function randomMobByTier(tier) {
     const pool = MOBS.getByTier(tier);
     // Exclude named bosses from random spawns
@@ -153,7 +177,7 @@ const Game = (() => {
   }
 
   // ── Setup ─────────────────────────────────────────────────────────────────
-  function init(playerDefs) {
+  function init(playerDefs, difficulty = 'medium') {
     // playerDefs: [{ id, name, isBot }]
     const starts = MapGrid.getPlayerStarts();
     state.players = playerDefs.map((def, i) => {
@@ -165,6 +189,7 @@ const Game = (() => {
     state.setupRollIdx = 0;
     state.currentIdx   = 0;
     state.turnNumber   = 0;
+    state.difficulty   = difficulty;
     state.phase = Phase.SETUP_ROLL;
     emit('state_change', { phase: state.phase, setupRollIdx: 0, player: state.players[0].name });
   }
@@ -173,11 +198,34 @@ const Game = (() => {
   const STARTING_ITEM_POOL = () =>
     [...EQUIPMENT.filter(i => i.tier === 1), ...OBJECTS];
 
+  // Roll 6 stats that sum exactly to `target` (each stat 1–6).
+  // Distributes extras randomly among slots, then shuffles the assignment.
+  function rollStatsForDifficulty(difficulty) {
+    const TARGETS = { easy: 32, medium: 24, hard: 15 };
+    const target  = TARGETS[difficulty] ?? 24;
+    const vals    = [1, 1, 1, 1, 1, 1];
+    let remaining = target - 6;
+    while (remaining > 0) {
+      // Pick uniformly from slots that still have room
+      const available = vals.reduce((a, v, i) => { if (v < 6) a.push(i); return a; }, []);
+      const idx = available[Math.floor(Math.random() * available.length)];
+      vals[idx]++;
+      remaining--;
+    }
+    // Fisher-Yates shuffle so stat identity (F/D/A/M/C/V) is random
+    for (let i = 5; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [vals[i], vals[j]] = [vals[j], vals[i]];
+    }
+    const keys   = ['F','D','A','M','C','V'];
+    const result = {};
+    keys.forEach((k, i) => { result[k] = vals[i]; });
+    return result;
+  }
+
   function handleSetupRoll() {
-    const player   = state.players[state.setupRollIdx];
-    const statKeys = ['F','D','A','M','C','V'];
-    const rolled   = {};
-    statKeys.forEach(s => { rolled[s] = Dice.d6(); });
+    const player = state.players[state.setupRollIdx];
+    const rolled = rollStatsForDifficulty(state.difficulty);
     player.baseStats = rolled;
 
     const pool = STARTING_ITEM_POOL();
@@ -249,7 +297,7 @@ const Game = (() => {
         break;
 
       case Phase.COMBAT:
-        if (action?.type === 'attack' || action?.type === 'bail' ||
+        if (action?.type === 'attack' || action?.type === 'bail' || action?.type === 'run' ||
             action?.type === 'bard'   || action?.type === 'defend') {
           handleCombatAction(action);
         } else if (action?.type === 'transmute') {
@@ -307,6 +355,13 @@ const Game = (() => {
         }
         break;
 
+      case Phase.CHEST:
+        if (action?.type === 'chest_pick') {
+          state.pendingChestRolls = null;
+          resolveChestRoll(current(), action.value);
+        }
+        break;
+
       case Phase.STOP_BLOCKED:
         nextTurn();
         break;
@@ -347,15 +402,6 @@ const Game = (() => {
       return;
     }
 
-    // Invisibility cloak: skip miniboss tiles if player chooses to
-    const destType = MapGrid.get(dest.x, dest.y);
-    if (destType === TileType.MINIBOSS && player.hasEquipped('invis_cloak')) {
-      emit('prompt', {
-        type: 'invis_cloak_choice',
-        message: 'Use Invisibility Cloak to skip this miniboss?',
-      });
-    }
-
     // If the destination (or path to it) passes through an uncleared STOP tile,
     // intercept: move player to the stop, roll, mark it used regardless of result.
     if (state.stopBlockedTiles?.has(destKey)) {
@@ -389,9 +435,12 @@ const Game = (() => {
       }
     }
 
+    const tilesWalked = state.reachableTiles.get(destKey) ?? 0;
     player.position = { ...dest };
     log(`${player.name} moves to (${dest.x}, ${dest.y})`);
     emit('player_moved', { player: player.name, position: dest });
+    player.gainXP('V', tilesWalked / 10);
+    player.gainXP('A', Math.min(2, tilesWalked / calcInventoryWeight(player)));
 
     if (state.pvpActive && !state.princess.carriedBy) pickUpPrincess(player);
 
@@ -439,13 +488,13 @@ const Game = (() => {
 
       case TileType.MINIBOSS: {
         if (player.hasUsedTile(x, y)) { log(`${player.name}: the enemy here was already defeated.`); endTileInteraction(); break; }
-        if (tData.skipMiniboss) { endTileInteraction(); break; }
+        if (player.hasEquipped('invis_cloak')) { log(`${player.name} slips past unseen (Invisibility Cloak).`); endTileInteraction(); break; }
         player.markTileUsed(x, y);
         const tier = tData.minibossTier ?? 1;
         const pool = MOBS.getByTier(tier).filter(m => !m.isBoss);
         const idx  = rollOrForced() - 1;
         const picked = pool[idx % pool.length] ?? null;
-        if (picked) startCombat(MOBS.spawn(picked.id), false);
+        if (picked) startCombat(MOBS.spawn(picked.id), false, null, tier);
         else endTileInteraction();
         break;
       }
@@ -492,6 +541,8 @@ const Game = (() => {
       }
 
       case TileType.PRIEST:
+        if (player.hasUsedTile(x, y)) { log(`${player.name}: the priest has already blessed you here.`); endTileInteraction(); break; }
+        player.markTileUsed(x, y);
         state.phase = Phase.PRIEST;
         emit('state_change', { phase: state.phase, player: player.name });
         break;
@@ -576,40 +627,113 @@ const Game = (() => {
     }
   }
 
+  // ── Generated mob (random encounter) ─────────────────────────────────────
+  // Stat budget = difficulty base + zone×12, distributed weighted toward dominant stats.
+  // Category determines animal name; max stat value sets the adjective.
+  function generateRandomMob(zone, difficulty) {
+    const STAT_BUDGET = { easy: 32, medium: 24, hard: 15 };
+    const totalBudget = (STAT_BUDGET[difficulty] ?? 24) + zone * 12;
+
+    const CATEGORIES = [
+      { key: 'F',    animal: 'Bear'    },
+      { key: 'D',    animal: 'Fox'     },
+      { key: 'M',    animal: 'Owl'     },
+      { key: 'C',    animal: 'Parrot'  },
+      { key: 'FD',   animal: 'Wolf'    },
+      { key: 'FM',   animal: 'Serpent' },
+      { key: 'FC',   animal: 'Gorilla' },
+      { key: 'DM',   animal: 'Hawk'    },
+      { key: 'DC',   animal: 'Raven'   },
+      { key: 'MC',   animal: 'Peacock' },
+      { key: 'FDM',  animal: 'Wyvern'  },
+      { key: 'FDC',  animal: 'Panther' },
+      { key: 'FMC',  animal: 'Sphinx'  },
+      { key: 'DMC',  animal: 'Harpy'   },
+      { key: 'FDMC', animal: 'Chimera' },
+    ];
+
+    const cat      = CATEGORIES[Math.floor(Math.random() * CATEGORIES.length)];
+    const dominant = cat.key.split('');
+    const ALL_STATS = ['F', 'D', 'A', 'M', 'C', 'V'];
+
+    // Each stat starts at 1; distribute remaining budget weighted 3:1 (dominant:other)
+    const statValues = { F: 1, D: 1, A: 1, M: 1, C: 1, V: 1 };
+    let remaining = totalBudget - 6;
+    while (remaining > 0) {
+      const pool = [];
+      for (const s of ALL_STATS) {
+        const w = dominant.includes(s) ? 3 : 1;
+        for (let i = 0; i < w; i++) pool.push(s);
+      }
+      statValues[pool[Math.floor(Math.random() * pool.length)]]++;
+      remaining--;
+    }
+
+    const maxStat = Math.max(...Object.values(statValues));
+    const adjective =
+      maxStat >= 21 ? 'Savage'  :
+      maxStat >= 17 ? 'Fierce'  :
+      maxStat >= 13 ? 'Rabid'   :
+      maxStat >= 9  ? 'Wild'    :
+      maxStat >= 5  ? 'Weak'    : 'Feeble';
+
+    // Loot: 1 equipment (tier 1–3), 1 random-stat potion (value 1–3), 2d6 coins
+    const lootTable = [];
+    const lootItem = randomTierItem(1, 3);
+    if (lootItem) lootTable.push({ itemId: lootItem.id });
+    lootTable.push({ rollForStat: true, potionValue: Math.ceil(Math.random() * 3) });
+
+    return {
+      id: `gen_${cat.animal.toLowerCase()}`,
+      name: `${adjective} ${cat.animal}`,
+      tier: zone,
+      stats: statValues,
+      hearts: { current: zone + 1, max: zone + 1 },
+      lootTable,
+      coins: 0,
+      coinDice: 2,
+      statusEffects: [],
+    };
+  }
+
   // ── Random event (? tile) ─────────────────────────────────────────────────
   function resolveRandomEvent(player) {
     const roll = rollOrForced();
     const zone = zoneTierAt(player.position.x, player.position.y);
-    const weakTier   = zone;
-    const strongTier = Math.min(zone + 1, 3);
     log(`${player.name} lands on ? — rolls ${roll}`);
 
     if (roll <= 2) {
-      const mob = MOBS.spawn(randomMobByTier(weakTier)?.id);
-      log(`A tier-${weakTier} enemy appears: ${mob?.name}`);
+      // Generated mob scaled to zone + difficulty
+      const mob = generateRandomMob(zone, state.difficulty);
+      log(`A wild ${mob.name} appears!`);
+      player.gainXP('F', 1); player.gainXP('D', 1); player.gainXP('M', 1);
       startCombat(mob, false);
     } else if (roll === 3) {
-      const mob = MOBS.spawn(randomMobByTier(strongTier)?.id);
-      log(`A tier-${strongTier} enemy appears: ${mob?.name}`);
+      // Zone miniboss from catalog
+      const template = randomMobByTier(zone);
+      const mob = template ? MOBS.spawn(template.id) : generateRandomMob(zone, state.difficulty);
+      log(`A zone miniboss appears: ${mob.name}!`);
+      player.gainXP('F', 1); player.gainXP('D', 1); player.gainXP('M', 1);
       startCombat(mob, false);
     } else if (roll === 4) {
-      // Lose money
-      const lost = Dice.d6() * 3;
-      player.coins = Math.max(0, player.coins - lost);
-      log(`${player.name} loses ${lost} coins`);
-      emit('coins_changed', { player: player.name, coins: player.coins, delta: -lost });
-      endTileInteraction();
-    } else if (roll === 5) {
-      // Find money
-      const found = Dice.d6() * 5;
+      // Find 3d6 coins
+      let found = 0; for (let i = 0; i < 3; i++) found += Dice.d6();
       player.coins += found;
       log(`${player.name} finds ${found} coins`);
       emit('coins_changed', { player: player.name, coins: player.coins, delta: found });
-      showLootConfirm(`Found ${found} coins on the ground!`);
+      showLootConfirm(`Found ${found} coins!`);
+    } else if (roll === 5) {
+      // Find 5d6 coins
+      let found = 0; for (let i = 0; i < 5; i++) found += Dice.d6();
+      player.coins += found;
+      log(`${player.name} finds ${found} coins`);
+      emit('coins_changed', { player: player.name, coins: player.coins, delta: found });
+      showLootConfirm(`Found ${found} coins!`);
     } else {
-      // Find equipment (roll for tier)
-      const tierRoll = Dice.d6();
-      const item = randomTierItem(tierRoll, tierRoll);
+      // Find equipment; tier range [zone+1, zone+4] capped at 6
+      const minTier = zone + 1;
+      const maxTier = Math.min(zone + 4, 6);
+      const item = randomTierItem(minTier, maxTier);
       if (item) {
         player.addItem(item.id);
         log(`${player.name} finds: ${item.name}`);
@@ -622,16 +746,7 @@ const Game = (() => {
   }
 
   // ── Chest ─────────────────────────────────────────────────────────────────
-  function handleChestOpen() {
-    const player = current();
-    const hadMapRoll = state.mapForcedRoll !== null;
-    let roll = rollOrForced();
-    if (player.hasEquipped('lucky_glove') && !hadMapRoll) {
-      const roll2 = Dice.d6();
-      roll = Math.max(roll, roll2);
-      log(`Lucky Glove: ${player.name} rolls again, takes ${roll}`);
-    }
-
+  function resolveChestRoll(player, roll) {
     let desc;
     if (roll === 1) {
       log(`Chest is empty`);
@@ -664,6 +779,27 @@ const Game = (() => {
     showLootConfirm(desc);
   }
 
+  function handleChestOpen() {
+    const player = current();
+    player.gainXP('C', 1);
+    const hadMapRoll = state.mapForcedRoll !== null;
+    const roll1 = rollOrForced();
+
+    if (player.hasEquipped('lucky_glove') && !hadMapRoll) {
+      const roll2 = Dice.d6();
+      log(`Lucky Glove: ${player.name} rolls ${roll1} and ${roll2}`);
+      if (roll1 === roll2) {
+        resolveChestRoll(player, roll1);
+      } else {
+        state.pendingChestRolls = [roll1, roll2];
+        state.phase = Phase.CHEST;
+        emit('state_change', { phase: Phase.CHEST, player: player.name, rolls: [roll1, roll2] });
+      }
+    } else {
+      resolveChestRoll(player, roll1);
+    }
+  }
+
   // ── Work ──────────────────────────────────────────────────────────────────
   function handleWork() {
     const player   = current();
@@ -688,14 +824,20 @@ const Game = (() => {
   // ── Priest ────────────────────────────────────────────────────────────────
   function handlePriestRoll() {
     const player = current();
+    // Only one blessing at a time — no stacking
+    const alreadyHas = player.inventory.some(id => id.startsWith('priest_pot_'))
+                    || player.priestBuff > 0;
+    if (alreadyHas) {
+      log(`${player.name} is already carrying a blessing — can only hold one at a time.`);
+      showLootConfirm(`You already carry a Holy Blessing. Use it before seeking another.`);
+      return;
+    }
     const roll   = rollOrForced();
-    const statKeys = ['F','D','A','M','C','V'];
-    const stat     = statKeys[roll - 1];
-    const buffId = `priest_${stat}`;
-    player.addItem(buffId);
-    log(`${player.name} receives a priest buff: +1${stat} (one-time use)`);
-    emit('priest_buff', { player: player.name, stat, buffId });
-    showLootConfirm(`The priest blesses you: +1 ${stat}!`);
+    const itemId = `priest_pot_${roll}`;
+    player.addItem(itemId);
+    log(`${player.name} receives a Holy Blessing +${roll} (all stats for one roll)`);
+    emit('priest_buff', { player: player.name, roll });
+    showLootConfirm(`The priest blesses you: Holy Blessing +${roll}!\nUse it from inventory to apply +${roll} to ALL stats for your next roll.`);
   }
 
   // ── Shop ──────────────────────────────────────────────────────────────────
@@ -709,6 +851,7 @@ const Game = (() => {
     }
     player.coins -= item.buyPrice;
     player.addItem(itemId);
+    if (item.guild) player.initGuildItemLevel(itemId);
     log(`${player.name} buys ${item.name} for ${item.buyPrice} coins`);
     emit('shop_transaction', { player: player.name, type: 'buy', item, coins: player.coins });
   }
@@ -718,7 +861,9 @@ const Game = (() => {
     const item   = getItem(itemId);
     if (!item) return;
     if (!player.hasItem(itemId) && !player.hasEquipped(itemId)) return;
-    const price = sellPrice(item);
+    const price = player.hasEquipped('crowbar')
+      ? Math.floor((item.buyPrice ?? 0) * 0.75)
+      : sellPrice(item);
     if (!player.removeItem(itemId)) {
       // Item is equipped — unequip first, then remove from inventory
       const slot = Object.keys(player.equipped).find(s => player.equipped[s]?.id === itemId);
@@ -728,6 +873,8 @@ const Game = (() => {
       emit('item_unequipped', { player: player.name, slot });
     }
     player.coins += price;
+    player.gainXP('C', price / 50);
+    if (item.guild) player.removeGuildItemLevel(item.id);
     log(`${player.name} sells ${item.name} for ${price} coins`);
     emit('shop_transaction', { player: player.name, type: 'sell', item, coins: player.coins });
   }
@@ -756,14 +903,18 @@ const Game = (() => {
 
   // ── Master — skill points ─────────────────────────────────────────────────
   function handleBuySkill(stat) {
-    const player    = current();
+    const player = current();
+    if (player.masterSkillsBought >= 5) {
+      emit('error', { message: 'Master skill purchase limit reached (5 total)' }); return;
+    }
     const currentLv = player.baseStats[stat];
     if (currentLv >= 6) { emit('error', { message: 'Stat already at maximum (6)' }); return; }
     const cost = 50;
     if (player.coins < cost) { emit('error', { message: 'Not enough coins' }); return; }
     player.coins -= cost;
     player.baseStats[stat]++;
-    log(`${player.name} upgrades ${stat} to ${player.baseStats[stat]} for ${cost} coins`);
+    player.masterSkillsBought++;
+    log(`${player.name} upgrades ${stat} to ${player.baseStats[stat]} for ${cost} coins [${player.masterSkillsBought}/5 master purchases]`);
     emit('skill_upgraded', { player: player.name, stat, newValue: player.baseStats[stat] });
   }
 
@@ -843,7 +994,8 @@ const Game = (() => {
       }
       const dests = getTeleportDestinations();
       if (!dests.length) { log(`No teleport destinations available`); return; }
-      state.teleportReturnPhase = state.phase;
+      state.teleportReturnPhase    = state.phase;
+      state.teleportDestinations   = dests;
       state.phase = Phase.TELEPORT_CHOICE;
       emit('state_change', { phase: state.phase, player: player.name, destinations: dests });
       return; // item is removed when destination is confirmed
@@ -875,10 +1027,30 @@ const Game = (() => {
         const amount = eff.value ?? 1;
         player.healHeart(amount);
         log(`${player.name} uses ${item.name} — +${amount} heart(s)`);
+      } else if (eff.type === 'all_stats') {
+        // Priest blessing: +N to every stat for exactly one roll
+        if (player.priestBuff > 0) {
+          log(`${player.name}: a blessing is already active — wait for it to be consumed`); return;
+        }
+        player.priestBuff = eff.value ?? 1;
+        log(`${player.name} uses ${item.name} — +${eff.value} to ALL stats for the next roll`);
       } else if (eff.stat) {
-        // Stat potion: temporary bonus for one dice roll
+        // Stat potion: temporary bonus for one dice roll — one per stat
+        if (player.hasTempBonus(eff.stat)) {
+          log(`${player.name}: a ${eff.stat} bonus is already active — wait for it to be used`); return;
+        }
         player.addTempBonus(eff.stat, eff.value ?? 1);
         log(`${player.name} uses ${item.name} — +${eff.value}${eff.stat} (next roll only)`);
+      } else if (eff.type === 'alcohol') {
+        // Alcohol: +C for next charisma roll, -malus to V for next speed roll — one per stat
+        if (player.hasTempBonus('C') || player.hasTempBonus('V')) {
+          log(`${player.name}: an alcohol effect is already active — wait for it to be used`); return;
+        }
+        const cBonus = eff.C ?? 1;
+        const vMalus = eff.malus ?? 1;
+        player.addTempBonus('C', cBonus);
+        player.addTempBonus('V', -vMalus);
+        log(`${player.name} drinks ${item.name} — +${cBonus}C but -${vMalus}V (next rolls)`);
       } else if (typeof eff === 'string') {
         log(`${player.name}: ${item.name} has no direct use here`); return;
       } else {
@@ -887,13 +1059,20 @@ const Game = (() => {
       }
     }
 
-    // Drops with statBonus (e.g. dragon_blood, werewolf_blood): last one full fight
+    // Drops with statBonus (e.g. dragon_blood, werewolf_blood): last one full fight — one per stat
     if (item.statBonus) {
+      const hasBlood = stat => player.statusEffects.some(e => e.type === 'drop_bonus' && e.stat === stat);
+      const applied = [];
       for (const [stat, val] of Object.entries(item.statBonus)) {
-        player.statusEffects.push({ type:'drop_bonus', stat, value: val, turnsLeft: 9999 });
+        if (!hasBlood(stat)) {
+          player.statusEffects.push({ type:'drop_bonus', stat, value: val, turnsLeft: 9999 });
+          applied.push(`+${val}${stat}`);
+        }
       }
-      const bonusStr = Object.entries(item.statBonus).map(([s,v]) => `+${v}${s}`).join(', ');
-      log(`${player.name} uses ${item.name} — ${bonusStr} (this fight)`);
+      if (applied.length === 0) {
+        log(`${player.name}: all stat bonuses from ${item.name} are already active`); return;
+      }
+      log(`${player.name} uses ${item.name} — ${applied.join(', ')} (this fight)`);
     }
 
     player.removeItem(itemId);
@@ -910,12 +1089,94 @@ const Game = (() => {
     return { atkType, msg };
   }
 
-  function startCombat(mob, isBoss, onCompleteCallback) {
+  // ── Guild item leveling ───────────────────────────────────────────────────
+  // mb-units needed to reach each level (index = currentLevel - 1)
+  const GUILD_MB_THRESHOLDS = [3, 6, 12, 24, 24];
+  // Zone weights: tier 0→1, 1→2, 2→4, 3→8
+  const ZONE_WEIGHT = [1, 2, 4, 8];
+
+  // Secondary (HP / parry / ability) threshold multiplier per slot category
+  function guildSecMult(slot) {
+    if (slot === 'charisma') return 6;
+    if (slot === 'armor' || slot === 'shield') return 1;
+    return 2; // strength, dexterity, magic, speed
+  }
+
+  // Called after winning a non-charisma miniboss fight.
+  // Updates progress for all equipped non-charisma guild items.
+  function applyMinibossProgress(player, combatData) {
+    const { minibossTier, combatHpDealt, combatParries } = combatData;
+    if (minibossTier == null) return;
+    const zw = ZONE_WEIGHT[minibossTier] ?? 1;
+
+    for (const slot of ALL_SLOTS) {
+      if (slot === 'charisma') continue;
+      const item = player.equipped[slot];
+      if (!item?.guild) continue;
+
+      const lvlData = player.guildItemLevels[item.id];
+      if (!lvlData || lvlData.itemLevel >= 6) continue;
+
+      const idx      = lvlData.itemLevel - 1;
+      const mbNeed   = GUILD_MB_THRESHOLDS[idx];
+      const secNeed  = mbNeed * guildSecMult(slot);
+
+      lvlData.levelProgress.mbUnits += zw;
+      if (slot === 'armor' || slot === 'shield') {
+        lvlData.levelProgress.secondaryUnits += combatParries * zw;
+      } else {
+        lvlData.levelProgress.secondaryUnits += combatHpDealt * zw;
+      }
+
+      if (lvlData.levelProgress.mbUnits >= mbNeed &&
+          lvlData.levelProgress.secondaryUnits >= secNeed) {
+        lvlData.itemLevel++;
+        lvlData.levelProgress = { mbUnits: 0, secondaryUnits: 0 };
+        const stat = Object.keys(item.statBonus ?? {})[0] ?? '?';
+        log(`${player.name}'s ${item.name} reaches Lv.${lvlData.itemLevel}! (+1 ${stat})`);
+      }
+    }
+  }
+
+  // Called after winning a miniboss fight via a charisma category (not flee/bail).
+  // Updates progress only for the equipped charisma guild item.
+  // combatData.combatAbilityUnits must already be zone-weighted.
+  function applyCharismaProgress(player, combatData) {
+    const { minibossTier, combatAbilityUnits } = combatData;
+    if (minibossTier == null) return;
+    const zw = ZONE_WEIGHT[minibossTier] ?? 1;
+
+    const item = player.equipped['charisma'];
+    if (!item?.guild) return;
+
+    const lvlData = player.guildItemLevels[item.id];
+    if (!lvlData || lvlData.itemLevel >= 6) return;
+
+    const idx     = lvlData.itemLevel - 1;
+    const mbNeed  = GUILD_MB_THRESHOLDS[idx];
+    const secNeed = mbNeed * 6;
+
+    lvlData.levelProgress.mbUnits        += zw;
+    lvlData.levelProgress.secondaryUnits += combatAbilityUnits;
+
+    if (lvlData.levelProgress.mbUnits >= mbNeed &&
+        lvlData.levelProgress.secondaryUnits >= secNeed) {
+      lvlData.itemLevel++;
+      lvlData.levelProgress = { mbUnits: 0, secondaryUnits: 0 };
+      log(`${player.name}'s ${item.name} reaches Lv.${lvlData.itemLevel}! (+1 C)`);
+    }
+  }
+
+  function startCombat(mob, isBoss, onCompleteCallback, minibossTier = null) {
     if (!mob) { endTileInteraction(); return; }
     const player = current();
     const initResult = Combat.initFight(player, mob);
 
     if (initResult.outcome === 'victory') {
+      // Kryss pre-fight kill still counts as a miniboss defeat
+      if (minibossTier != null && !isBoss) {
+        applyMinibossProgress(player, { minibossTier, combatHpDealt: 1, combatParries: 0 });
+      }
       grantLoot(player, initResult.loot);
       emit('combat_victory', { player: player.name, mob: mob.name, loot: initResult.loot });
       const lootDesc = buildLootDescription(initResult.loot);
@@ -933,6 +1194,12 @@ const Game = (() => {
       mobNextAttackType:   null,
       deployedFriend:      null,
       charismaResult:      null,
+      minibossTier,
+      combatHpDealt:       0,
+      combatParries:       0,
+      combatAbilityUnits:  0,
+      fightAttackTypes:    new Set(),
+      usedCharismaOptions: new Set(),
     };
     if (!initResult.playerFirst) {
       prepareNextMobAttack(mob, initResult.log);
@@ -949,8 +1216,16 @@ const Game = (() => {
 
     let result;
     if (subPhase === 'player_attack') {
-      if (action.type !== 'attack' && action.type !== 'bail' && action.type !== 'bard') return;
+      if (action.type !== 'attack' && action.type !== 'bail' && action.type !== 'run' && action.type !== 'bard') return;
+      if (action.type === 'attack' && action.attackType) {
+        state.pendingCombat.fightAttackTypes.add(action.attackType);
+      }
+      const prevMobHearts = mob.hearts.current;
       result = Combat.takePlayerAttack(player, mob, action, fightLog);
+      if (state.pendingCombat?.minibossTier != null) {
+        const hpDiff = prevMobHearts - mob.hearts.current;
+        if (hpDiff > 0) state.pendingCombat.combatHpDealt += hpDiff;
+      }
       if (result.outcome === 'charisma_pending') {
         state.pendingCombat.combatSubPhase = 'charisma_pick';
         state.pendingCombat.charismaResult = result.charismaResult;
@@ -977,9 +1252,13 @@ const Game = (() => {
       const preRolledAtk = state.pendingCombat.mobNextAttackType;
       state.pendingCombat.mobNextAttackType = null;
       result = Combat.takeMobAttack(player, mob, fightLog, preRolledAtk);
+      if (state.pendingCombat?.minibossTier != null && result.parried) {
+        state.pendingCombat.combatParries++;
+      }
       if (result.outcome === 'ongoing') state.pendingCombat.combatSubPhase = 'player_attack';
     }
 
+    if (result.coinsChanged) emit('coins_changed', { player: player.name, coins: player.coins });
     emit('combat_update', {
       player: player.name,
       mob,
@@ -990,9 +1269,21 @@ const Game = (() => {
 
     if (result.outcome === 'ongoing') return;
 
+    const savedCombat = state.pendingCombat;
     state.pendingCombat = null;
 
     if (result.outcome === 'victory') {
+      if (savedCombat.minibossTier != null && !savedCombat.isBoss) {
+        applyMinibossProgress(player, savedCombat);
+      }
+      // Solo-type XP bonus: +3 if all player attacks used exactly one stat (F, D, or M)
+      if (savedCombat.fightAttackTypes.size === 1) {
+        const [soloType] = savedCombat.fightAttackTypes;
+        if (['F','D','M'].includes(soloType)) {
+          player.gainXP(soloType, 3);
+          log(`${player.name} wins with pure ${soloType} attacks — +3 ${soloType} XP!`);
+        }
+      }
       log(`${player.name} defeats ${mob.name}`);
       grantLoot(player, result.loot);
       emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot });
@@ -1034,6 +1325,22 @@ const Game = (() => {
       return;
     }
 
+    // Track ability units for C guild item leveling (zone-weighted at source)
+    if (state.pendingCombat?.minibossTier != null && action.tier) {
+      const ABILITY_PTS = { 1: 2, 2: 3, 3: 6 };
+      const zw = ZONE_WEIGHT[state.pendingCombat.minibossTier] ?? 1;
+      state.pendingCombat.combatAbilityUnits += (ABILITY_PTS[action.tier] ?? 0) * zw;
+    }
+
+    // C XP for each unique dialogue option used in this fight (by family+tier key)
+    if (action.family && action.tier) {
+      const optKey = `${action.family}:${action.tier}`;
+      if (!state.pendingCombat.usedCharismaOptions.has(optKey)) {
+        state.pendingCombat.usedCharismaOptions.add(optKey);
+        player.gainXP('C', action.tier);
+      }
+    }
+
     const result = Combat.applyCharismaOutcome(player, mob, action, charismaResult, newLog);
     fightLog.push(...newLog);
 
@@ -1048,9 +1355,13 @@ const Game = (() => {
       return;
     }
 
+    const savedCombat = state.pendingCombat;
     state.pendingCombat = null;
 
     if (result.outcome === 'victory') {
+      if (savedCombat.minibossTier != null && !savedCombat.isBoss) {
+        applyMinibossProgress(player, savedCombat);
+      }
       log(`${player.name} defeats ${mob.name}`);
       grantLoot(player, result.loot);
       emit('combat_update', { player: player.name, mob, newLog, outcome: 'victory' });
@@ -1065,10 +1376,16 @@ const Game = (() => {
       const lootDesc = buildLootDescription(result.loot);
       showLootConfirm(`${mob.name} defeated! Loot: ${lootDesc}`, onComplete ?? null);
     } else if (result.outcome === 'befriended') {
+      if (savedCombat.minibossTier != null && !savedCombat.isBoss) {
+        applyCharismaProgress(player, savedCombat);
+      }
       log(`${player.name} befriends ${mob.name}`);
       emit('combat_update', { player: player.name, mob, newLog, outcome: 'befriended' });
       endTileInteraction();
     } else if (result.outcome === 'charisma_end') {
+      if (savedCombat.minibossTier != null && !savedCombat.isBoss) {
+        applyCharismaProgress(player, savedCombat);
+      }
       emit('combat_update', { player: player.name, mob, newLog, outcome: 'charisma_end' });
       log(`${player.name} ends the encounter with ${mob.name}`);
       endTileInteraction();
@@ -1108,7 +1425,11 @@ const Game = (() => {
 
     if (result.outcome === 'victory') {
       player.friendsList.push({ ...deployedFriend });
+      const savedCombat = state.pendingCombat;
       state.pendingCombat = null;
+      if (savedCombat.minibossTier != null && !savedCombat.isBoss) {
+        applyMinibossProgress(player, savedCombat);
+      }
       log(`${deployedFriend.name} defeats ${mob.name} for ${player.name}`);
       grantLoot(player, result.loot);
       emit('combat_update', { player: player.name, mob, newLog: result.newLog, outcome: 'victory' });

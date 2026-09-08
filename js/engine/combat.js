@@ -236,7 +236,8 @@ const Combat = (() => {
       }
 
       case 'deceive:1': {
-        const coins = Dice.d6() * 3;
+        let coins = Dice.d6() * 3;
+        if (player.hasEquipped('con_artist_hat')) coins *= 2;
         player.coins += coins;
         log.push(`${player.name} steals ${coins} coins and flees!`);
         player.clearFightEffects(); mob.statusEffects = [];
@@ -244,7 +245,8 @@ const Combat = (() => {
       }
 
       case 'deceive:2': {
-        const coins = Dice.d6() * 5;
+        let coins = Dice.d6() * 5;
+        if (player.hasEquipped('con_artist_hat')) coins *= 2;
         player.coins += coins;
         log.push(`${player.name} steals ${coins} coins and flees!`);
         player.clearFightEffects(); mob.statusEffects = [];
@@ -252,7 +254,8 @@ const Combat = (() => {
       }
 
       case 'deceive:3': {
-        const coins = Dice.d6() * 8;
+        let coins = Dice.d6() * 8;
+        if (player.hasEquipped('con_artist_hat')) coins *= 2;
         player.coins += coins;
         log.push(`${player.name} pulls off a grand heist — steals ${coins} coins and flees!`);
         player.clearFightEffects(); mob.statusEffects = [];
@@ -283,11 +286,17 @@ const Combat = (() => {
       }
 
       case 'respect:3': {
+        if (player.dialogueSkillsGained >= 4) {
+          log.push(`${player.name} has reached the dialogue skill limit (4 gains) — no further stat bonus.`);
+          player.clearFightEffects(); mob.statusEffects = [];
+          return { outcome: 'charisma_end' };
+        }
         const upgradeable = ['F','D','A','M','C','V'].filter(s => player.baseStats[s] < 8);
         if (upgradeable.length) {
           const stat = upgradeable[Math.floor(Math.random() * upgradeable.length)];
           player.baseStats[stat]++;
-          log.push(`${player.name} permanently gains +1 ${stat} (now ${player.baseStats[stat]})`);
+          player.dialogueSkillsGained++;
+          log.push(`${player.name} permanently gains +1 ${stat} (now ${player.baseStats[stat]}) [${player.dialogueSkillsGained}/4 dialogue gains]`);
         } else {
           log.push(`${player.name} has already mastered all skills!`);
         }
@@ -357,23 +366,67 @@ const Combat = (() => {
       }
       newLog.push(`Cannot escape!`);
 
+    } else if (action.type === 'run') {
+      if (player.chainedTurns > 0) {
+        newLog.push(`${player.name} is chained — cannot run!`);
+        fightLog.push(...newLog);
+        return { outcome: 'ongoing', newLog };
+      }
+      const playerRoll = player.getStat('V') + Dice.d6();
+      const mobV       = mob.stats.V;
+      newLog.push(`${player.name} tries to run: V+d6=${playerRoll} vs ${targetName(mob)} V=${mobV}`);
+      if (playerRoll > mobV) {
+        newLog.push(`Escaped!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        fightLog.push(...newLog);
+        return { outcome: 'escaped', newLog };
+      }
+      newLog.push(`Failed to run — ${targetName(mob)} attacks!`);
+      fightLog.push(...newLog);
+      return { outcome: 'ongoing', newLog };
+
     } else if (!checkLightningBlock(player, newLog)) {
 
       if (action.type === 'attack') {
         const { attackType, spellId } = action;
         const spell = spellId ? getItem(spellId) : null;
 
+        // Garrote: auto-kill on F when mob has ≤2 hearts (no roll)
+        if (attackType === 'F' && player.hasEquipped('garrote') && mob.hearts.current <= 2) {
+          player.consumeTempBonus('F');
+          mob.hearts.current = 0;
+          newLog.push(`Garrote! ${targetName(mob)} is executed!`);
+          if (player.hasEnchantment('bloodlust')) { player.healHeart(1); newLog.push(`Bloodlust: ${player.name} +1 ❤`); }
+          const loot = resolveLoot(player, mob);
+          newLog.push(`${player.name} wins!`);
+          player.clearFightEffects(); mob.statusEffects = [];
+          fightLog.push(...newLog);
+          return { outcome: 'victory', loot, newLog };
+        }
+
         let attackRoll = player.getStat(attackType) + Dice.d6();
-        if (attackType === 'M' && spell?.magicValue) attackRoll += spell.magicValue;
+        if (attackType === 'M' && spell?.magicValue) {
+          attackRoll += spell.magicValue * (player.hasEquipped('dark_tome') ? 2 : 1);
+        }
         player.consumeTempBonus(attackType);
         if (spellId) player.removeItem(spellId);
+        if (spellId && spell?.magicValue) player.gainXP('M', spell.magicValue);
 
         const mobDefRoll = mobRoll(mob, DEFENSE_FOR[attackType]);
         newLog.push(`${player.name} [${attackType}]: ${attackRoll} vs ${targetName(mob)} defends ${mobDefRoll}`);
 
+        let coinsChanged = false;
         if (attackRoll > mobDefRoll) {
           mob.hearts.current--;
           newLog.push(`Hit! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+          player.gainXP(attackType, 1);
+          // Pickpocket Glove: steal 2×d6 coins on successful D hit
+          if (attackType === 'D' && player.hasEquipped('pickpocket_glove')) {
+            const stolen = Dice.d6() + Dice.d6();
+            player.coins += stolen;
+            newLog.push(`Pickpocket: stole ${stolen} coins!`);
+            coinsChanged = true;
+          }
           if (spell?.effect) applyEffect(spell.effect, mob, newLog);
           applyEnchantmentsOnHit(player, mob, newLog);
           if (mob.hearts.current <= 0) {
@@ -387,7 +440,9 @@ const Combat = (() => {
           }
         } else {
           newLog.push(`Miss`);
+          player.gainXP(attackType, 2);
         }
+        if (coinsChanged) { fightLog.push(...newLog); return { outcome: 'ongoing', newLog, coinsChanged }; }
 
       } else if (action.type === 'bard') {
         const charismaResult = resolveCharismaRoll(player, mob, newLog);
@@ -409,6 +464,7 @@ const Combat = (() => {
 
   function takeMobAttack(player, mob, fightLog, preRolledAtkType = null) {
     const newLog = [];
+    let parried = false;
 
     // Fire tick for mob at start of their turn
     const fmDmg = processFire(mob, newLog);
@@ -436,6 +492,8 @@ const Combat = (() => {
         newLog.push(`${targetName(mob)} [${atkType}]: ${mobAtkRoll} vs ${player.name} defends ${defRoll}`);
 
         if (mobAtkRoll > defRoll) {
+          player.gainXP('A', 2);
+          if (atkType === 'D') player.gainXP('V', 2);
           if (player.hasEnchantment('thorns') && Math.random() < 0.3) {
             mob.hearts.current--;
             newLog.push(`Thorns! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
@@ -457,6 +515,9 @@ const Combat = (() => {
           }
         } else {
           newLog.push(`Miss`);
+          player.gainXP('A', 1);
+          if (atkType === 'D') player.gainXP('V', 1);
+          parried = true;
         }
       }
     }
@@ -466,7 +527,7 @@ const Combat = (() => {
     mobTickEffects(mob);
 
     fightLog.push(...newLog);
-    return { outcome: 'ongoing', newLog };
+    return { outcome: 'ongoing', newLog, parried };
   }
 
   // ── Legacy synchronous resolver (kept for reference, not called by game) ──

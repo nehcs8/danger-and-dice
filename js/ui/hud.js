@@ -14,6 +14,14 @@ const HUD = (() => {
     return order.map(id => ({ id, count: counts.get(id) }));
   }
 
+  // Returns display name with "[Lv.N]" suffix for guild items.
+  function guildItemLabel(item, player) {
+    if (!item?.guild) return item?.name ?? '—';
+    const lvlData = player.guildItemLevels?.[item.id];
+    const lv = lvlData?.itemLevel ?? 1;
+    return `${item.name} [Lv.${lv}]`;
+  }
+
   function init() {
     logEntries.length = 0;
     buildLegend();
@@ -93,9 +101,21 @@ const HUD = (() => {
         const diff = eff - base;
         const diffStr = diff > 0 ? `<span class="bonus">+${diff}</span>`
                       : diff < 0 ? `<span class="malus">${diff}</span>` : '';
-        return `<tr><td>${labels[s]}</td><td>${base}${diffStr}</td></tr>`;
+        const xp    = player.xp?.[s] ?? 0;
+        const xpMax = base * 10;
+        const pct   = Math.min(100, Math.round((xp / xpMax) * 100));
+        return `<tr>
+          <td>${labels[s]}</td>
+          <td>${base}${diffStr}</td>
+          <td style="width:54px;padding-left:4px">
+            <div class="xp-bar-outer" title="${xp.toFixed(1)}/${xpMax} XP">
+              <div class="xp-bar-fill" style="width:${pct}%"></div>
+            </div>
+          </td>
+        </tr>`;
       }).join('')
-    }</table>`;
+    }</table>
+    <button class="xp-detail-btn" onclick="HUD.showXpPanel()">XP Details</button>`;
   }
 
   function equippedHTML(player, readOnly = false) {
@@ -113,7 +133,7 @@ const HUD = (() => {
           : '';
         return `<div class="equip-slot" title="${slot}">
           <span class="slot-icon">${labels[slot]}</span>
-          <span class="slot-item">${item ? item.name + ench : '—'}</span>
+          <span class="slot-item">${item ? guildItemLabel(item, player) + ench : '—'}</span>
           ${unequipBtn}
         </div>`;
       }).join('')
@@ -180,7 +200,7 @@ const HUD = (() => {
         const enchSpan = enchName
           ? ` <span class="enchanted-item">✦ ${enchName}</span>` : '';
         equippedDiv.innerHTML =
-          `<span>${equippedItem.name}${enchSpan}</span>
+          `<span>${guildItemLabel(equippedItem, player)}${enchSpan}</span>
            <button class="inv-equip-btn" onclick="HUD.tryUnequip('${slot}')">▼ Unequip</button>`;
       } else {
         equippedDiv.innerHTML = '<span style="color:#555;font-size:0.8rem">— empty —</span>';
@@ -192,7 +212,7 @@ const HUD = (() => {
         const row  = document.createElement('div');
         row.className = 'inv-slot-option';
         row.innerHTML =
-          `<span>${item?.name ?? id}${count > 1 ? ` ×${count}` : ''}</span>
+          `<span>${guildItemLabel(item, player) ?? id}${count > 1 ? ` ×${count}` : ''}</span>
            <button class="inv-equip-btn" ${player.canEquip(item) ? '' : 'disabled'}
              onclick="HUD.tryEquip('${id}')">▲ Equip</button>`;
         section.appendChild(row);
@@ -325,5 +345,46 @@ const HUD = (() => {
 
   function _el(id) { return document.getElementById(id); }
 
-  return { init, update, appendLog, tryEquip, tryUnequip, tryUse, showPlayerInfo, closePlayerInfo, openInventoryPopup, closeInventoryPopup };
+  function xpSourcesText(stat) {
+    const src = {
+      F: 'Hit +1 · Miss +2 · Random fight +1 · Solo-kill +3',
+      D: 'Hit +1 · Miss +2 · Random fight +1 · Solo-kill +3',
+      M: 'Hit +1 · Miss +2 · Spell used +magicVal · Random fight +1 · Solo-kill +3',
+      A: 'Parry +1 · Receive hit +2 · Move score: +min(2, tiles÷weight)',
+      C: 'Unique dialogue +tier · Sell value÷50 · Chest opened +1',
+      V: 'Tiles walked÷10 · Block DEX +1 · Receive DEX +2',
+    };
+    return src[stat] ?? '';
+  }
+
+  function showXpPanel() {
+    const player = Game.getCurrentPlayer();
+    if (!player) return;
+    const stats  = ['F','D','A','M','C','V'];
+    const labels = { F:'STR', D:'DEX', A:'ARM', M:'MAG', C:'CHA', V:'SPD' };
+    const el = _el('xp-stats-list');
+    el.innerHTML = stats.map(s => {
+      const xp    = player.xp?.[s] ?? 0;
+      const xpMax = player.baseStats[s] * 10;
+      const pct   = Math.min(100, Math.round((xp / xpMax) * 100));
+      return `<div class="xp-row">
+        <div class="xp-row-header">
+          <span class="xp-stat-label">${labels[s]} <span style="color:#ffd700">${player.baseStats[s]}</span></span>
+          <span class="xp-progress-text">${xp.toFixed(1)} / ${xpMax}</span>
+        </div>
+        <div class="xp-bar-outer"><div class="xp-bar-fill" style="width:${pct}%"></div></div>
+        <div class="xp-sources">${xpSourcesText(s)}</div>
+      </div>`;
+    }).join('');
+    _el('overlay').classList.remove('hidden');
+    _el('modal-xp').classList.remove('hidden');
+  }
+
+  function closeXpPanel() {
+    _el('modal-xp').classList.add('hidden');
+    const anyVisible = document.querySelectorAll('.modal:not(.hidden)').length > 0;
+    if (!anyVisible) _el('overlay').classList.add('hidden');
+  }
+
+  return { init, update, appendLog, tryEquip, tryUnequip, tryUse, showPlayerInfo, closePlayerInfo, openInventoryPopup, closeInventoryPopup, showXpPanel, closeXpPanel };
 })();

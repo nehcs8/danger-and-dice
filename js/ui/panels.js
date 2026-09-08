@@ -18,18 +18,23 @@ const Panels = (() => {
   function specialItemEffectDesc(effect) {
     if (typeof effect !== 'string') return '';
     switch (effect) {
-      case 'kryss':           return 'Roll >3 at fight start: enemy −1 heart before combat';
-      case 'skip_miniboss':   return 'Can pass through miniboss tiles without fighting';
-      case 'magic_no_spell':  return 'Can use magic attacks without owning a spell';
-      case 'charisma_damage': return 'Charisma successes deal 1 damage to the enemy';
-      case 'dex_first':       return 'DEX attacks always go first regardless of initiative';
-      case 'always_escape':   return 'Can always escape from combat (reusable)';
-      case 'coins_plus3':     return '+3 coins added to every enemy kill reward';
-      case 'double_chest':    return 'Roll chest twice, keep the better result';
-      case 'all_drops':       return 'All loot items drop in double quantity';
-      case 'bard_lv2_free':   return 'Unlock tier-2 charisma options without the diff requirement';
-      case 'coins_times3':    return 'Coins earned from kills are tripled';
-      case 'pass_obstacles':  return 'Can walk secret paths without Compass';
+      case 'kryss':               return 'Roll >3 at fight start: enemy −1 heart before combat';
+      case 'garrote_kill':        return 'F attacks auto-kill enemies with ≤2 hearts (no roll needed)';
+      case 'skip_miniboss':       return 'Can pass through miniboss tiles without fighting';
+      case 'double_magicvalue':   return 'Magic spell bonus (magicValue) is doubled';
+      case 'magic_no_spell':      return 'Can use magic attacks without owning a spell';
+      case 'charisma_damage':     return 'Charisma successes deal 1 damage to the enemy';
+      case 'dex_first':           return 'DEX attacks always go first regardless of initiative';
+      case 'always_escape':       return 'Can always escape from combat (reusable)';
+      case 'coins_plus3':         return '+3 coins added to every enemy kill reward';
+      case 'sell_75pct':          return 'Sell items for 75% of buy price instead of 50%';
+      case 'double_chest':        return 'Roll chest twice — choose which result to keep';
+      case 'all_drops':           return 'All loot items drop in double quantity';
+      case 'bard_lv2_free':       return 'Unlock tier-2 charisma options without the diff requirement';
+      case 'deceive_double_coins':return 'Charisma "deceive" outcomes yield double coins';
+      case 'coins_times3':        return 'Coins earned from kills are tripled';
+      case 'pickpocket':          return 'Successful DEX attacks also steal 2×d6 coins';
+      case 'pass_obstacles':      return 'Can walk secret paths without Compass';
       default: return '';
     }
   }
@@ -89,13 +94,14 @@ const Panels = (() => {
     });
     _el('btn-teleport-cancel').addEventListener('click', () => Game.submitAction({ type: 'close' }));
     _el('btn-transmutation-cancel').addEventListener('click', () => {
-      _el('transmutation-picker').classList.add('hidden');
+      refreshSpellPanel(true);
     });
 
     Game.on('item_used', () => {
       if (Game.getState().phase === Game.Phase.COMBAT) {
         refreshCombatConsumables();
         refreshCombatPlayerStats();
+        refreshSpellPanel(Game.getState().combatSubPhase === 'player_attack');
       }
     });
 
@@ -152,6 +158,8 @@ const Panels = (() => {
       if (magicBtn) magicBtn.disabled = !player.canAttackMagic();
       const bailBtn = _el('btn-bail');
       if (bailBtn) bailBtn.disabled = !player.canEscape();
+      const runBtn = _el('btn-run');
+      if (runBtn) runBtn.disabled = player.chainedTurns > 0;
     });
 
     // Show rolled stats in modal after game emits setup_rolled
@@ -191,6 +199,9 @@ const Panels = (() => {
         showModal('modal-priest');
         _el('priest-result').textContent = '';
         break;
+      case Game.Phase.CHEST:
+        showChestChoice(data);
+        break;
       case Game.Phase.MAP_CHOICE:
         showMapChoice(data);
         break;
@@ -212,10 +223,10 @@ const Panels = (() => {
   }
 
   // ── Combat ────────────────────────────────────────────────────────────────
-  // Format a mob stat with its roll base (stat − 3) in small text.
+  // Format a mob stat with its dice roll range in small text.
+  // Mob roll formula: stat − 3 + d6, so range is [stat−2, stat+3].
   function mobStatCell(val) {
-    const base = val - 3;
-    return `${val} <span style="color:#888;font-size:0.78em">(${base >= 0 ? '+' : ''}${base})</span>`;
+    return `${val} <span style="color:#888;font-size:0.78em">[${val - 2}~${val + 3}]</span>`;
   }
 
   function showCombat(data) {
@@ -258,31 +269,35 @@ const Panels = (() => {
     setCombatPhase(data.combatSubPhase ?? 'player_attack');
 
     // Reset picker state for new fight
-    _el('charisma-picker')?.classList.add('hidden');
     _el('charisma-sub-swap')?.classList.add('hidden');
     _el('charisma-sub-stat')?.classList.add('hidden');
     _el('charisma-sub-trade')?.classList.add('hidden');
     _el('friend-picker')?.classList.add('hidden');
     _el('friend-fighting-ui')?.classList.add('hidden');
     _el('friend-defeat-ui')?.classList.add('hidden');
+    refreshSpellPanel(data.combatSubPhase !== 'mob_attack');
 
     const magicBtn = document.querySelector('[data-type="M"]');
     if (magicBtn) magicBtn.disabled = !player.canAttackMagic();
     _el('btn-bail').disabled = !player.canEscape();
+    _el('btn-run').disabled  = player.chainedTurns > 0;
   }
 
   function bindCombatButtons() {
     document.querySelectorAll('.attack-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const attackType = btn.dataset.type;
-        if (attackType === 'M') {
-          showSpellPicker();
-        } else if (attackType === 'C') {
-          Game.submitAction({ type: 'bard' }); // roll first; picker appears after result
+        if (attackType === 'C') {
+          Game.submitAction({ type: 'bard' }); // roll first; charisma picker appears after result
         } else {
+          // M uses base magic (no spell); spells are clicked directly in the right panel
           Game.submitAction({ type: 'attack', attackType });
         }
       });
+    });
+
+    _el('btn-run').addEventListener('click', () => {
+      Game.submitAction({ type: 'run' });
     });
 
     _el('btn-bail').addEventListener('click', () => {
@@ -344,13 +359,15 @@ const Panels = (() => {
     const phaseLabel = _el('combat-phase-label');
 
     if (attackBtns) attackBtns.classList.toggle('hidden', !isAttack);
-    if (defendBtns) defendBtns.classList.toggle('hidden', isAttack || isCha || friendMode);
+    const defendBtn = _el('btn-defend');
+    if (defendBtn) defendBtn.disabled = isAttack || isCha || friendMode;
 
     const label = isAttack ? 'YOUR ATTACK' : isCha ? 'CHARISMA'
       : isFriendFight ? 'FRIEND FIGHTING' : isFriendDied ? 'FRIEND FELL' : 'DEFEND';
     if (phaseLabel) phaseLabel.textContent = label;
 
-    if (!isCha)        _el('charisma-picker')?.classList.add('hidden');
+    // Manage right column content
+    if (!isCha) refreshSpellPanel(isAttack); // spell panel enabled only on player_attack
     if (!isFriendFight) _el('friend-fighting-ui')?.classList.add('hidden');
     if (!isFriendDied)  _el('friend-defeat-ui')?.classList.add('hidden');
 
@@ -405,39 +422,45 @@ const Panels = (() => {
     picker.classList.remove('hidden');
   }
 
-  function showSpellPicker() {
-    const player = Game.getCurrentPlayer();
-    const spells = player.inventory
-      .map(id => getItem(id))
-      .filter(i => i?.subtype === 'attack');
+  // ── Combat extra panel helpers ────────────────────────────────────────────
+  // Switch which panel is visible inside #combat-extra.
+  function showExtraPanel(panelId) {
+    ['spell-panel', 'charisma-picker', 'transmutation-picker'].forEach(id => {
+      _el(id)?.classList.toggle('hidden', id !== panelId);
+    });
+  }
 
-    const picker = _el('spell-picker');
+  // Rebuild the permanent spell list. enabled=true during player_attack, false otherwise.
+  function refreshSpellPanel(enabled) {
+    const player = Game.getCurrentPlayer();
     const list   = _el('spell-list');
+    if (!player || !list) return;
     list.innerHTML = '';
 
-    if (!spells.length && !player.hasEquipped('cursed_ring')) {
-      Game.submitAction({ type: 'attack', attackType: 'M', spellId: null });
-      return;
+    const spellIds = player.inventory.filter(id => getItem(id)?.subtype === 'attack');
+
+    if (!spellIds.length) {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'color:#555;font-size:0.78em;font-style:italic;margin-bottom:4px';
+      msg.textContent = 'No attack spells';
+      list.appendChild(msg);
+    } else {
+      stackItems(spellIds).forEach(({ id, count }) => {
+        const spell = getItem(id);
+        const btn   = document.createElement('button');
+        btn.textContent =
+          `${spell.name} (+${spell.magicValue}M)${spell.effect ? ' ✦' : ''}` +
+          (count > 1 ? ` ×${count}` : '');
+        btn.disabled = !enabled;
+        btn.addEventListener('click', () => {
+          btn.disabled = true; // prevent double-submit
+          Game.submitAction({ type: 'attack', attackType: 'M', spellId: id });
+        });
+        list.appendChild(btn);
+      });
     }
 
-    spells.forEach(spell => {
-      const btn = document.createElement('button');
-      btn.textContent = `${spell.name} (+${spell.magicValue}M)${spell.effect ? ' ✦' : ''}`;
-      btn.addEventListener('click', () => {
-        Game.submitAction({ type: 'attack', attackType: 'M', spellId: spell.id });
-        picker.classList.add('hidden');
-      });
-      list.appendChild(btn);
-    });
-
-    const noSpell = document.createElement('button');
-    noSpell.textContent = 'No spell (base M only)';
-    noSpell.addEventListener('click', () => {
-      Game.submitAction({ type: 'attack', attackType: 'M', spellId: null });
-      picker.classList.add('hidden');
-    });
-    list.appendChild(noSpell);
-    picker.classList.remove('hidden');
+    showExtraPanel('spell-panel');
   }
 
   function showCharismaPicker(charismaResult) {
@@ -447,6 +470,7 @@ const Panels = (() => {
     _el('charisma-sub-swap').classList.add('hidden');
     _el('charisma-sub-stat').classList.add('hidden');
     _el('charisma-sub-trade').classList.add('hidden');
+    showExtraPanel('charisma-picker');
 
     const sign = diff >= 0 ? '+' : '';
     _el('charisma-roll-result').textContent =
@@ -457,7 +481,6 @@ const Panels = (() => {
 
     if (diff >= 1) {
       const btn = _chaBtn('← Retreat', '#555', () => {
-        picker.classList.add('hidden');
         Game.submitAction({ type: 'charisma_outcome', retreat: true });
       });
       btn.style.marginBottom = '5px';
@@ -471,7 +494,6 @@ const Panels = (() => {
         msg.textContent = 'No options available';
         optionsEl.appendChild(msg);
       }
-      picker.classList.remove('hidden');
       return;
     }
 
@@ -525,7 +547,6 @@ const Panels = (() => {
           if (opt.click) {
             opt.click();
           } else {
-            picker.classList.add('hidden');
             Game.submitAction({ type:'charisma_outcome', family:fam.key, tier:opt.tier });
           }
         });
@@ -534,8 +555,6 @@ const Panels = (() => {
 
       optionsEl.appendChild(section);
     });
-
-    picker.classList.remove('hidden');
   }
 
   function _chaBtn(text, bg, onClick) {
@@ -570,7 +589,6 @@ const Panels = (() => {
           if (!firstStat) { firstStat = s; render(s); }
           else {
             sub.classList.add('hidden');
-            charismaPicker.classList.add('hidden');
             Game.submitAction({ type:'charisma_outcome', family:'mock', tier:1,
                                 stat1:firstStat, stat2:s });
           }
@@ -603,7 +621,6 @@ const Panels = (() => {
         'border-radius:3px;cursor:pointer;font-size:0.8em';
       btn.addEventListener('click', () => {
         sub.classList.add('hidden');
-        charismaPicker.classList.add('hidden');
         Game.submitAction({ type:'charisma_outcome', family:'mock', tier, stat:s });
       });
       list.appendChild(btn);
@@ -661,7 +678,6 @@ const Panels = (() => {
 
     _el('btn-charisma-trade-confirm').onclick = () => {
       sub.classList.add('hidden');
-      charismaPicker.classList.add('hidden');
       Game.submitAction({ type:'charisma_outcome', family:'respect', tier:1,
                           mobItemId:selMob, playerItemId:selPlr });
     };
@@ -704,17 +720,16 @@ const Panels = (() => {
 
   // ── Transmutation picker ──────────────────────────────────────────────────
   function showTransmutationPicker() {
-    const picker = _el('transmutation-picker');
-    const title  = _el('transmutation-picker-title');
-    title.textContent = 'Transmutation: pick first stat';
+    const title = _el('transmutation-picker-title');
+    title.textContent = 'Pick first stat';
     renderTransmutationStats(null, from => {
       title.textContent = `Swap ${from} with:`;
       renderTransmutationStats(from, to => {
-        picker.classList.add('hidden');
+        refreshSpellPanel(true);
         Game.submitAction({ type: 'transmute', from, to });
       });
     });
-    picker.classList.remove('hidden');
+    showExtraPanel('transmutation-picker');
   }
 
   function renderTransmutationStats(exclude, onSelect) {
@@ -831,10 +846,12 @@ const Panels = (() => {
       const enchName = equip.enchantment?.name ?? equip.enchantment?.id ?? null;
       const enchSpan = enchName
         ? ` <em style="color:#c9a0ff;font-size:0.8em">✦ ${enchName}</em>` : '';
+      const lvlData  = item.guild ? player.guildItemLevels?.[equip.id] : null;
+      const lvlSpan  = lvlData ? ` <span style="color:#ffd700;font-size:0.8em">[Lv.${lvlData.itemLevel}]</span>` : '';
       const div = document.createElement('div');
       div.className = 'shop-item';
       div.innerHTML =
-        `<span>${item.name}${enchSpan} <span style="color:#666;font-size:0.75em">[eq]</span></span>
+        `<span>${item.name}${lvlSpan}${enchSpan} <span style="color:#666;font-size:0.75em">[eq]</span></span>
          <span>${price}💰</span>
          <button>Sell</button>`;
       div.querySelector('button').addEventListener('click', () =>
@@ -848,12 +865,14 @@ const Panels = (() => {
       .filter(id => getItem(id)?.buyPrice)
       .sort((a, b) => (getItem(a)?.name ?? a).localeCompare(getItem(b)?.name ?? b));
     stackItems(sellableIds).forEach(({ id, count }) => {
-      const item  = getItem(id);
-      const price = sellPrice(item);
+      const item    = getItem(id);
+      const price   = sellPrice(item);
+      const lvlData = item?.guild ? player.guildItemLevels?.[id] : null;
+      const lvlSpan = lvlData ? ` <span style="color:#ffd700;font-size:0.8em">[Lv.${lvlData.itemLevel}]</span>` : '';
       const div   = document.createElement('div');
       div.className = 'shop-item';
       div.innerHTML =
-        `<span>${item.name}${count > 1 ? ` ×${count}` : ''}</span>
+        `<span>${item.name}${lvlSpan}${count > 1 ? ` ×${count}` : ''}</span>
          <span>${price}💰</span>
          <button data-id="${id}">Sell</button>`;
       div.querySelector('button').addEventListener('click', () =>
@@ -874,17 +893,26 @@ const Panels = (() => {
     if (masterHeader) masterHeader.innerHTML =
       `Master <span style="float:right;color:#ffd700">💰 ${player.coins}</span>`;
 
-    // Skill upgrades (flat 50 coins, cap at 6)
+    // Skill upgrades (flat 50 coins, max 5 total purchases, cap at 6)
+    const masterBought = player.masterSkillsBought ?? 0;
+    const masterRemain = 5 - masterBought;
     const skillEl = _el('master-skills');
-    skillEl.innerHTML = '<h3>Buy Skill Point — 50💰 each (max 6)</h3>';
+    skillEl.innerHTML =
+      `<h3>Buy Skill Point — 50💰 each</h3>
+       <div style="color:#aaa;font-size:0.8em;margin-bottom:6px">
+         Master purchases: ${masterBought}/5 used — ${masterRemain} remaining
+       </div>`;
     statKeys.forEach(stat => {
-      const cur    = player.baseStats[stat];
-      const capped = cur >= 6;
-      const btn    = document.createElement('button');
-      btn.disabled = capped || player.coins < 50;
-      btn.innerHTML = capped
+      const cur      = player.baseStats[stat];
+      const atStatCap = cur >= 6;
+      const atBuyCap  = masterRemain <= 0;
+      const btn = document.createElement('button');
+      btn.disabled = atStatCap || atBuyCap || player.coins < 50;
+      btn.innerHTML = atStatCap
         ? `${statLabels[stat]} (${cur}) — MAX`
-        : `${statLabels[stat]} (${cur} → ${cur + 1}) — 50💰`;
+        : atBuyCap
+          ? `${statLabels[stat]} (${cur}) — LIMIT REACHED`
+          : `${statLabels[stat]} (${cur} → ${cur + 1}) — 50💰`;
       btn.addEventListener('click', () => Game.submitAction({ type: 'buy_skill', stat }));
       skillEl.appendChild(btn);
     });
@@ -939,6 +967,20 @@ const Panels = (() => {
   }
 
   // ── Map choice ────────────────────────────────────────────────────────────
+  function showChestChoice(data) {
+    showModal('modal-chest-choice');
+    const LABELS = ['Empty', 'Small coins (d6×3)', 'Consumable', 'Big coins (d6×10)', 'Tier 1-2 item', 'Tier 3-6 item'];
+    const container = _el('chest-choice-buttons');
+    container.innerHTML = '';
+    for (const roll of (data.rolls ?? [])) {
+      const btn = document.createElement('button');
+      btn.style.cssText = 'flex:1;padding:12px 8px;background:#2a2a4a;color:#ffd700;border:1px solid #ffd700;border-radius:4px;cursor:pointer;font-size:0.9em;text-align:center';
+      btn.innerHTML = `<strong>${roll}</strong><br><span style="color:#ccc;font-size:0.85em">${LABELS[roll - 1] ?? ''}</span>`;
+      btn.addEventListener('click', () => Game.submitAction({ type: 'chest_pick', value: roll }));
+      container.appendChild(btn);
+    }
+  }
+
   function showMapChoice(data) {
     showModal('modal-map');
     const tt = data.tileType; // numeric TileType constant
@@ -1005,6 +1047,12 @@ const Panels = (() => {
     _el('gameover-message').textContent = data.winner
       ? `${data.winner} wins!`
       : 'Everyone has fallen.';
+
+    const recap = _el('gameover-recap');
+    recap.innerHTML = '';
+    if (data.winner && SpectateStats.isActive()) {
+      recap.appendChild(SpectateStats.renderRecap(data.winner));
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

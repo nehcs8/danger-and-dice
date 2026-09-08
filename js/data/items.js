@@ -100,12 +100,23 @@ const POTIONS = [
   { id:'pot_V6', name:'Potion 6V', effect:{stat:'V', value:6}, buyPrice:30 },
   { id:'pot_invis', name:'Invisibility Potion', effect:{type:'skip_fight'},    buyPrice:30 },
   { id:'pot_heal',  name:'Healing Potion',       effect:{type:'heal', value:1}, buyPrice:50 },
-  { id:'alcohol_1', name:'Alcohol 1', effect:{type:'alcohol', C:1, malus:1}, buyPrice:5  },
-  { id:'alcohol_2', name:'Alcohol 2', effect:{type:'alcohol', C:2, malus:1}, buyPrice:10 },
-  { id:'alcohol_3', name:'Alcohol 3', effect:{type:'alcohol', C:3, malus:2}, buyPrice:15 },
-  { id:'alcohol_4', name:'Alcohol 4', effect:{type:'alcohol', C:4, malus:2}, buyPrice:20 },
-  { id:'alcohol_5', name:'Alcohol 5', effect:{type:'alcohol', C:5, malus:3}, buyPrice:25 },
-  { id:'alcohol_6', name:'Alcohol 6', effect:{type:'alcohol', C:6, malus:3}, buyPrice:30 },
+  { id:'alcohol_1', name:'Alcohol 1', effect:{type:'alcohol', C:1, malus:1}, buyPrice:10 },
+  { id:'alcohol_2', name:'Alcohol 2', effect:{type:'alcohol', C:2, malus:1}, buyPrice:20 },
+  { id:'alcohol_3', name:'Alcohol 3', effect:{type:'alcohol', C:3, malus:2}, buyPrice:30 },
+  { id:'alcohol_4', name:'Alcohol 4', effect:{type:'alcohol', C:4, malus:2}, buyPrice:40 },
+  { id:'alcohol_5', name:'Alcohol 5', effect:{type:'alcohol', C:5, malus:3}, buyPrice:50 },
+  { id:'alcohol_6', name:'Alcohol 6', effect:{type:'alcohol', C:6, malus:3}, buyPrice:60 },
+];
+
+// Priest blessings — given by the Priest tile, one per visit, cannot be stacked.
+// When used, grants +N to ALL stats for exactly one roll (attack, defense, or movement).
+const PRIEST_POTIONS = [
+  { id:'priest_pot_1', name:'Holy Blessing +1', effect:{type:'all_stats', value:1} },
+  { id:'priest_pot_2', name:'Holy Blessing +2', effect:{type:'all_stats', value:2} },
+  { id:'priest_pot_3', name:'Holy Blessing +3', effect:{type:'all_stats', value:3} },
+  { id:'priest_pot_4', name:'Holy Blessing +4', effect:{type:'all_stats', value:4} },
+  { id:'priest_pot_5', name:'Holy Blessing +5', effect:{type:'all_stats', value:5} },
+  { id:'priest_pot_6', name:'Holy Blessing +6', effect:{type:'all_stats', value:6} },
 ];
 
 const OBJECTS = [
@@ -133,18 +144,23 @@ const DROPS = [
 
 // Special equipment sold at Assassin Guild and Thief Guild
 const SPECIAL_EQUIPMENT = [
-  { id:'kryss',             name:'Kryss',             slot:'strength',  statBonus:{F:1}, effect:'kryss',           guild:'assassin', buyPrice:50  },
-  { id:'invis_cloak',       name:'Invisibility Cloak',slot:'armor',     statBonus:{A:1}, effect:'skip_miniboss',   guild:'assassin', buyPrice:50  },
-  { id:'cursed_ring',       name:'Cursed Ring',       slot:'magic',     statBonus:{M:1}, effect:'magic_no_spell',  guild:'assassin', buyPrice:100 },
-  { id:'cursed_rattle',     name:'Cursed Rattle',     slot:'charisma',  statBonus:{C:1}, effect:'charisma_damage', guild:'assassin', buyPrice:50  },
-  { id:'blowpipe',          name:'Blowpipe',          slot:'dexterity', statBonus:{D:1}, effect:'dex_first',       guild:'assassin', buyPrice:50  },
-  { id:'stealth_shoes',     name:'Stealth Shoes',     slot:'speed',     statBonus:{V:1}, effect:'always_escape',   guild:'assassin', buyPrice:50  },
-  { id:'big_knife',         name:'Big Knife',         slot:'strength',  statBonus:{F:1}, effect:'coins_plus3',     guild:'thief',    buyPrice:50  },
-  { id:'lucky_glove',       name:'Lucky Glove',       slot:'armor',     statBonus:{A:1}, effect:'double_chest',    guild:'thief',    buyPrice:100 },
-  { id:'bottomless_bag',    name:'Bottomless Bag',    slot:'magic',     statBonus:{M:1}, effect:'all_drops',       guild:'thief',    buyPrice:100 },
-  { id:'magic_flute_thief', name:'Magic Flute',       slot:'charisma',  statBonus:{C:1}, effect:'bard_lv2_free',   guild:'thief',    buyPrice:50  },
-  { id:'small_pistol',      name:'Small Pistol',      slot:'dexterity', statBonus:{D:1}, effect:'coins_times3',    guild:'thief',    buyPrice:50  },
-  { id:'ragged_sandals',    name:'Ragged Sandals',    slot:'speed',     statBonus:{V:1}, effect:'pass_obstacles',  guild:'thief',    buyPrice:50  },
+  { id:'kryss',             name:'Kryss',             slot:'strength',  statBonus:{F:1}, effect:'kryss',               guild:'assassin', buyPrice:50  },
+  { id:'garrote',           name:'Garrote',           slot:'strength',  statBonus:{F:1}, effect:'garrote_kill',         guild:'assassin', buyPrice:75  },
+  { id:'invis_cloak',       name:'Invisibility Cloak',slot:'armor',     statBonus:{A:1}, effect:'skip_miniboss',        guild:'assassin', buyPrice:50  },
+  { id:'dark_tome',         name:'Dark Tome',         slot:'magic',     statBonus:{M:1}, effect:'double_magicvalue',    guild:'assassin', buyPrice:100 },
+  { id:'cursed_ring',       name:'Cursed Ring',       slot:'magic',     statBonus:{M:1}, effect:'magic_no_spell',       guild:'assassin', buyPrice:100 },
+  { id:'cursed_rattle',     name:'Cursed Rattle',     slot:'charisma',  statBonus:{C:1}, effect:'charisma_damage',      guild:'assassin', buyPrice:50  },
+  { id:'blowpipe',          name:'Blowpipe',          slot:'dexterity', statBonus:{D:1}, effect:'dex_first',            guild:'assassin', buyPrice:50  },
+  { id:'stealth_shoes',     name:'Stealth Shoes',     slot:'speed',     statBonus:{V:1}, effect:'always_escape',        guild:'assassin', buyPrice:50  },
+  { id:'big_knife',         name:'Big Knife',         slot:'strength',  statBonus:{F:1}, effect:'coins_plus3',          guild:'thief',    buyPrice:50  },
+  { id:'crowbar',           name:'Crowbar',           slot:'strength',  statBonus:{F:1}, effect:'sell_75pct',           guild:'thief',    buyPrice:75  },
+  { id:'lucky_glove',       name:'Lucky Glove',       slot:'armor',     statBonus:{A:1}, effect:'double_chest',         guild:'thief',    buyPrice:100 },
+  { id:'bottomless_bag',    name:'Bottomless Bag',    slot:'magic',     statBonus:{M:1}, effect:'all_drops',            guild:'thief',    buyPrice:100 },
+  { id:'magic_flute_thief', name:'Magic Flute',       slot:'charisma',  statBonus:{C:1}, effect:'bard_lv2_free',        guild:'thief',    buyPrice:50  },
+  { id:'con_artist_hat',    name:"Con Artist's Hat",  slot:'charisma',  statBonus:{C:1}, effect:'deceive_double_coins', guild:'thief',    buyPrice:75  },
+  { id:'small_pistol',      name:'Small Pistol',      slot:'dexterity', statBonus:{D:1}, effect:'coins_times3',         guild:'thief',    buyPrice:50  },
+  { id:'pickpocket_glove',  name:'Pickpocket Glove',  slot:'dexterity', statBonus:{D:1}, effect:'pickpocket',           guild:'thief',    buyPrice:75  },
+  { id:'ragged_sandals',    name:'Ragged Sandals',    slot:'speed',     statBonus:{V:1}, effect:'pass_obstacles',       guild:'thief',    buyPrice:50  },
 ];
 
 // Unique boss drops — tier beyond normal equipment (not buyable)
@@ -210,7 +226,7 @@ const BARD_ABILITIES = {
 const ITEM_REGISTRY = {};
 [
   ...EQUIPMENT, ...COMBAT_SPELLS, ...UTILITY_SPELLS,
-  ...POTIONS, ...OBJECTS, ...DROPS, ...SPECIAL_EQUIPMENT,
+  ...POTIONS, ...PRIEST_POTIONS, ...OBJECTS, ...DROPS, ...SPECIAL_EQUIPMENT,
   ...BOSS_DROPS,
 ].forEach(item => { ITEM_REGISTRY[item.id] = item; });
 

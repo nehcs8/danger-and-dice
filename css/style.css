@@ -62,10 +62,43 @@ body {
 }
 #btn-start:hover { background: #ffe44d; }
 
+#difficulty-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diff-label {
+  color: #aaa;
+  font-size: 0.9rem;
+}
+
+.diff-btn {
+  padding: 6px 18px;
+  font-size: 0.9rem;
+  background: #1a1a2e;
+  color: #778;
+  border: 1px solid #333;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.diff-btn:hover { border-color: #667; color: #aab; }
+.diff-btn.diff-active { background: #1a2a50; color: #ffd700; border-color: #ffd700; font-weight: bold; }
+
+#top-bar-difficulty {
+  font-size: 0.78rem;
+  font-weight: bold;
+  letter-spacing: 1px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid #333;
+}
+
 /* ── Game layout ─────────────────────────────────────────────────────────── */
+/* column so the spectate bar can sit above #layout; hidden bar = no visible change */
 #screen-game.active {
-  flex-direction: row !important;
-  align-items: stretch;
+  flex-direction: column;
 }
 
 #layout {
@@ -73,6 +106,213 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* ── Spectate bar ────────────────────────────────────────────────────────── */
+#spectate-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  height: 38px;
+  min-height: 38px;
+  flex-shrink: 0;
+  background: #08101a;
+  border-bottom: 1px solid #1e2a40;
+}
+
+#spectate-badge {
+  font-size: 0.7rem;
+  font-weight: bold;
+  letter-spacing: 2px;
+  color: #2a4a8a;
+  background: #0d1828;
+  border: 1px solid #1e3060;
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+
+#spectate-turn {
+  color: #ffd700;
+  font-weight: bold;
+  font-size: 0.88rem;
+  min-width: 72px;
+}
+
+.spectate-speed-label {
+  color: #445;
+  font-size: 0.8rem;
+}
+
+.speed-btn {
+  padding: 2px 9px;
+  background: #0f1828;
+  color: #445;
+  border: 1px solid #1e2a40;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: border-color 0.15s;
+}
+.speed-btn:hover { border-color: #3a4a6a; color: #778; }
+.speed-btn.speed-active { background: #1a2a50; color: #7af; border-color: #3a5a9a; }
+
+#btn-spectate-stats {
+  margin-left: auto;
+  padding: 4px 12px;
+  background: #1a2a50;
+  color: #7af;
+  border: 1px solid #3a5a9a;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+#btn-spectate-stats:hover { background: #253a6a; }
+
+/* ── Spectate stats overlay ──────────────────────────────────────────────── */
+#spectate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0,0,0,0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#spectate-overlay.hidden { display: none; }
+
+#modal-spectate {
+  background: #111826;
+  border: 1px solid #2a3a5a;
+  border-radius: 8px;
+  padding: 18px 22px;
+  width: 650px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.spectate-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.spectate-modal-header h2 { color: #ffd700; font-size: 1.05rem; letter-spacing: 1px; }
+
+#btn-spectate-close {
+  padding: 3px 10px;
+  background: #2a2a3a;
+  color: #aaa;
+  border: 1px solid #444;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+#btn-spectate-close:hover { background: #3a3a4a; color: #ddd; }
+
+#spectate-legend {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  padding: 4px 0;
+  border-bottom: 1px solid #1a2035;
+}
+.spectate-legend-item { font-weight: bold; }
+
+#spectate-charts {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.spectate-chart-wrap {
+  background: #080d14;
+  border: 1px solid #151e30;
+  border-radius: 4px;
+  padding: 8px 10px 4px;
+}
+.spectate-chart-title {
+  color: #6a7a9a;
+  font-size: 0.76rem;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+.spectate-chart-wrap canvas { display: block; max-width: 100%; }
+
+/* ── Game-over recap ─────────────────────────────────────────────────────── */
+#modal-gameover {
+  max-width: 660px;
+  width: 660px;
+}
+
+.recap-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.recap-section-title {
+  color: #ffd700;
+  font-size: 0.82rem;
+  font-weight: bold;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border-bottom: 1px solid #2a3a5a;
+  padding-bottom: 5px;
+  margin-bottom: 8px;
+}
+
+.recap-milestones {
+  background: #111826;
+  border: 1px solid #1e2e4a;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.milestone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.milestone-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+.milestone-turn {
+  color: #5a8ab0;
+  font-size: 0.75rem;
+  min-width: 52px;
+  font-variant-numeric: tabular-nums;
+}
+
+.milestone-label {
+  color: #c8c0b0;
+}
+
+.milestone-item:last-child .milestone-label {
+  color: #ffd700;
+  font-weight: bold;
+}
+
+.recap-empty {
+  color: #4a5570;
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+.recap-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* ── Left panel ──────────────────────────────────────────────────────────── */
@@ -238,13 +478,13 @@ body {
 .modal h3    { color: #c8b8a0; font-size: 0.95rem; margin-top: 4px; }
 .modal h4    { color: #aaa; font-size: 0.85rem; }
 
-/* Combat modal — two-column layout */
-#modal-combat { max-width: 740px; min-width: 560px; }
+/* Combat modal — fixed three-column layout */
+#modal-combat { width: 860px; max-width: 95vw; min-width: unset; }
 
 #combat-layout {
   display: flex;
   gap: 14px;
-  min-height: 320px;
+  min-height: 340px;
 }
 
 #combat-left {
@@ -255,10 +495,38 @@ body {
 }
 
 #combat-right {
-  flex: 1;
+  flex: 0 0 210px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+#combat-extra {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-left: 1px solid #2a2a4a;
+  padding-left: 14px;
+  overflow-y: auto;
+}
+
+.combat-extra-label {
+  color: #7af;
+  font-size: 0.78em;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+#combat-phase-label {
+  color: #ffd700;
+  font-weight: bold;
+  font-size: 0.85em;
+  margin-bottom: 4px;
+  letter-spacing: 1px;
 }
 
 #combat-enemy-info, #combat-player-info {
@@ -303,9 +571,24 @@ body {
 
 #combat-actions {
   display: flex;
+  flex-direction: column;
   gap: 6px;
+}
+
+#combat-attack-buttons {
+  display: flex;
   flex-wrap: wrap;
+  gap: 6px;
+}
+
+#combat-consumables {
   margin-top: auto;
+}
+
+#btn-defend:disabled {
+  filter: grayscale(1);
+  opacity: 0.35;
+  cursor: default;
 }
 
 .attack-btn, #btn-bail {
@@ -443,15 +726,15 @@ body {
 #btn-restart { font-size: 1rem; padding: 8px 24px; align-self: center; }
 
 /* Spell / bard pickers */
-#spell-picker, #bard-picker {
-  background: rgba(0,0,0,0.2);
-  padding: 8px;
+#spell-panel, #bard-picker {
+  background: transparent;
+  padding: 0;
   border-radius: 4px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-#spell-picker button, #bard-picker button {
+#spell-panel button, #bard-picker button {
   padding: 5px 8px;
   background: #2a3a50;
   color: #e0d8c8;
@@ -460,7 +743,44 @@ body {
   cursor: pointer;
   text-align: left;
 }
-#spell-picker button:hover, #bard-picker button:hover { background: #3a4a60; }
+#spell-panel button:hover:not(:disabled), #bard-picker button:hover { background: #3a4a60; }
+#spell-panel button:disabled { opacity: 0.35; cursor: default; }
+
+/* ── XP bars ─────────────────────────────────────────────────────────────── */
+.xp-bar-outer {
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 3px;
+  height: 5px;
+  overflow: hidden;
+}
+.xp-bar-fill {
+  background: linear-gradient(90deg, #3366cc, #66aaff);
+  height: 100%;
+  transition: width 0.3s;
+}
+.xp-detail-btn {
+  margin-top: 4px;
+  padding: 2px 8px;
+  background: #1e2a3e;
+  color: #888;
+  border: 1px solid #333;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.72em;
+  width: 100%;
+}
+.xp-detail-btn:hover { background: #2a3a50; color: #ccc; }
+.xp-row { margin-bottom: 10px; }
+.xp-row-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2px;
+}
+.xp-stat-label { font-size: 0.9em; color: #c8b8a0; font-weight: bold; }
+.xp-progress-text { font-size: 0.8em; color: #888; }
+.xp-sources { color: #555; font-size: 0.72em; margin-top: 2px; line-height: 1.3; }
 
 /* Master */
 #master-skills button, #master-enchant button {

@@ -31,11 +31,29 @@
           <label><input type="checkbox" class="player-bot" disabled> Bot</label>
         </div>
       </div>
+      <div id="difficulty-selector">
+        <span class="diff-label">Difficulty:</span>
+        <button class="diff-btn" data-diff="easy">Easy</button>
+        <button class="diff-btn diff-active" data-diff="medium">Medium</button>
+        <button class="diff-btn" data-diff="hard">Hard</button>
+      </div>
       <button id="btn-start">Start Game</button>
     </div>
 
     <!-- ── Main game screen ─────────────────────────────────── -->
     <div id="screen-game" class="screen">
+
+      <!-- Top bar: always visible; spectate-only elements hidden until all-bot mode -->
+      <div id="spectate-bar">
+        <span id="top-bar-difficulty"></span>
+        <span id="spectate-turn">Turn 0</span>
+        <span id="spectate-badge" class="spectate-only hidden">SPECTATE</span>
+        <span class="spectate-speed-label spectate-only hidden">Speed:</span>
+        <button class="speed-btn speed-active spectate-only hidden" data-delay="600">1×</button>
+        <button class="speed-btn spectate-only hidden" data-delay="200">3×</button>
+        <button class="speed-btn spectate-only hidden" data-delay="50">10×</button>
+        <button id="btn-spectate-stats">📊 Stats</button>
+      </div>
 
       <div id="layout">
 
@@ -101,29 +119,54 @@
             <div id="combat-log"></div>
           </div>
 
-          <!-- Right: player + consumables + actions -->
+          <!-- Middle: player info + action buttons + consumables -->
           <div id="combat-right">
             <div id="combat-player-info"></div>
-            <div id="combat-consumables">
-              <h4>Use Item</h4>
-              <div id="combat-consumable-list"></div>
-            </div>
             <div id="combat-actions">
-              <div id="combat-phase-label" style="color:#ffd700;font-weight:bold;font-size:0.85em;margin-bottom:4px;letter-spacing:1px">YOUR ATTACK</div>
+              <div id="combat-phase-label">YOUR ATTACK</div>
               <div id="combat-attack-buttons">
                 <button class="attack-btn" data-type="F">⚔ STR</button>
                 <button class="attack-btn" data-type="D">🏹 DEX</button>
                 <button class="attack-btn" data-type="M">✨ MAG</button>
                 <button class="attack-btn" data-type="C">🎵 CHA</button>
                 <button id="btn-bail">🪢 Bail</button>
+                <button id="btn-run">🏃 Run</button>
                 <button id="btn-deploy-friend" class="hidden" style="width:100%;padding:4px;margin-top:3px;background:#1a4a6a;color:#7df;border:1px solid #7df;border-radius:4px;cursor:pointer;font-size:0.85em">👥 Deploy Friend</button>
               </div>
-              <div id="combat-defend-buttons" class="hidden">
+              <div id="combat-defend-buttons">
                 <button id="btn-defend" style="width:100%;padding:8px;background:#2a3a5a;color:#7af;border:1px solid #7af;border-radius:4px;cursor:pointer;font-size:1em">🛡 Roll Defense</button>
               </div>
             </div>
-            <div id="spell-picker" class="hidden">
-              <h4>Choose spell:</h4>
+            <div id="bail-picker" class="hidden">
+              <h4>Escape using:</h4>
+              <div id="bail-picker-list" style="display:flex;flex-direction:column;gap:4px"></div>
+            </div>
+            <div id="friend-picker" class="hidden" style="border:1px solid #7df;border-radius:4px;padding:4px">
+              <div style="color:#7df;font-size:0.8em;font-weight:bold;margin-bottom:3px">Deploy which friend?</div>
+              <div id="friend-list" style="display:flex;flex-direction:column;gap:3px"></div>
+              <button id="btn-friend-picker-cancel" style="margin-top:4px;font-size:0.75em;padding:2px 8px;background:#555;color:#fff;border:none;border-radius:3px;cursor:pointer">Cancel</button>
+            </div>
+            <div id="friend-fighting-ui" class="hidden" style="border:1px solid #7df;border-radius:4px;padding:4px">
+              <div id="deployed-friend-status" style="color:#7df;font-size:0.82em;margin-bottom:4px"></div>
+              <button id="btn-friend-next-round" style="width:100%;padding:5px;background:#1a4a6a;color:#7df;border:1px solid #7df;border-radius:4px;cursor:pointer;font-size:0.9em">▶ Next Round</button>
+            </div>
+            <div id="friend-defeat-ui" class="hidden" style="border:1px solid #f66;border-radius:4px;padding:4px">
+              <div style="color:#f66;font-size:0.82em;margin-bottom:4px">▼ Friend defeated!</div>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <button id="btn-friend-take-over" style="padding:5px;background:#2a2a5a;color:#fff;border:1px solid #aaf;border-radius:4px;cursor:pointer;font-size:0.85em">⚔ Take Over Fight</button>
+                <button id="btn-friend-deploy-next" class="hidden" style="padding:5px;background:#1a4a6a;color:#7df;border:1px solid #7df;border-radius:4px;cursor:pointer;font-size:0.85em">👥 Deploy Another Friend</button>
+              </div>
+            </div>
+            <div id="combat-consumables">
+              <h4>Use Item</h4>
+              <div id="combat-consumable-list"></div>
+            </div>
+          </div>
+
+          <!-- Extra column: always visible — spells / charisma / transmutation -->
+          <div id="combat-extra">
+            <div id="spell-panel">
+              <div class="combat-extra-label">SPELLS</div>
               <div id="spell-list"></div>
             </div>
             <div id="charisma-picker" class="hidden">
@@ -157,28 +200,9 @@
                 </div>
               </div>
             </div>
-            <div id="bail-picker" class="hidden">
-              <h4>Escape using:</h4>
-              <div id="bail-picker-list" style="display:flex;flex-direction:column;gap:4px"></div>
-            </div>
-            <div id="friend-picker" class="hidden" style="border:1px solid #7df;border-radius:4px;padding:4px;margin-top:4px">
-              <div style="color:#7df;font-size:0.8em;font-weight:bold;margin-bottom:3px">Deploy which friend?</div>
-              <div id="friend-list" style="display:flex;flex-direction:column;gap:3px"></div>
-              <button id="btn-friend-picker-cancel" style="margin-top:4px;font-size:0.75em;padding:2px 8px;background:#555;color:#fff;border:none;border-radius:3px;cursor:pointer">Cancel</button>
-            </div>
-            <div id="friend-fighting-ui" class="hidden" style="border:1px solid #7df;border-radius:4px;padding:4px;margin-top:4px">
-              <div id="deployed-friend-status" style="color:#7df;font-size:0.82em;margin-bottom:4px"></div>
-              <button id="btn-friend-next-round" style="width:100%;padding:5px;background:#1a4a6a;color:#7df;border:1px solid #7df;border-radius:4px;cursor:pointer;font-size:0.9em">▶ Next Round</button>
-            </div>
-            <div id="friend-defeat-ui" class="hidden" style="border:1px solid #f66;border-radius:4px;padding:4px;margin-top:4px">
-              <div style="color:#f66;font-size:0.82em;margin-bottom:4px">▼ Friend defeated!</div>
-              <div style="display:flex;flex-direction:column;gap:3px">
-                <button id="btn-friend-take-over" style="padding:5px;background:#2a2a5a;color:#fff;border:1px solid #aaf;border-radius:4px;cursor:pointer;font-size:0.85em">⚔ Take Over Fight</button>
-                <button id="btn-friend-deploy-next" class="hidden" style="padding:5px;background:#1a4a6a;color:#7df;border:1px solid #7df;border-radius:4px;cursor:pointer;font-size:0.85em">👥 Deploy Another Friend</button>
-              </div>
-            </div>
             <div id="transmutation-picker" class="hidden">
-              <h4 id="transmutation-picker-title">Transmutation: pick first stat</h4>
+              <div class="combat-extra-label" style="color:#c8a0ff">TRANSMUTATION</div>
+              <div id="transmutation-picker-title" style="font-size:0.82em;color:#eee;margin-bottom:6px">Pick first stat</div>
               <div id="transmutation-stat-list" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:6px"></div>
               <button id="btn-transmutation-cancel" style="padding:4px 10px;background:#555;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85em">Cancel</button>
             </div>
@@ -230,11 +254,25 @@
         <button id="btn-map-skip" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:4px;cursor:pointer">Roll Normally</button>
       </div>
 
+      <!-- Lucky Glove chest choice modal -->
+      <div id="modal-chest-choice" class="modal hidden">
+        <h2>🧤 Lucky Glove</h2>
+        <p style="color:#aaa;font-size:0.85em;margin:4px 0 10px">You rolled twice — choose which result to keep:</p>
+        <div id="chest-choice-buttons" style="display:flex;gap:10px;justify-content:center;margin-bottom:10px"></div>
+      </div>
+
       <!-- Loot confirm modal -->
       <div id="modal-loot" class="modal hidden">
         <h2>Loot</h2>
         <div id="loot-description"></div>
         <button id="btn-loot-confirm">Continue</button>
+      </div>
+
+      <!-- XP progress modal -->
+      <div id="modal-xp" class="modal hidden">
+        <h2>XP Progress</h2>
+        <div id="xp-stats-list"></div>
+        <button onclick="HUD.closeXpPanel()" style="margin-top:10px;padding:5px 16px;background:#ffd700;color:#1a1a2e;border:none;border-radius:3px;cursor:pointer;font-weight:bold;align-self:flex-start">Close</button>
       </div>
 
       <!-- Player info modal (other players) -->
@@ -263,11 +301,24 @@
       <div id="modal-gameover" class="modal hidden">
         <h2>Game Over</h2>
         <div id="gameover-message"></div>
+        <div id="gameover-recap"></div>
         <button id="btn-restart">Play Again</button>
       </div>
 
     </div>
 
+  </div>
+
+  <!-- ── Spectate stats overlay (independent of game modals) ── -->
+  <div id="spectate-overlay" class="hidden">
+    <div id="modal-spectate">
+      <div class="spectate-modal-header">
+        <h2>Bot Statistics</h2>
+        <button id="btn-spectate-close">✕ Close</button>
+      </div>
+      <div id="spectate-legend"></div>
+      <div id="spectate-charts"></div>
+    </div>
   </div>
 
   <!-- ── Scripts — order matters (no modules, global scope) ── -->
@@ -283,6 +334,7 @@
   <script src="js/ui/renderer.js"></script>
   <script src="js/ui/hud.js"></script>
   <script src="js/ui/panels.js"></script>
+  <script src="js/ui/spectate.js"></script>
   <script src="js/main.js"></script>
 
 </body>

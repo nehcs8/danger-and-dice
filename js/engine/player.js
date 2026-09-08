@@ -25,12 +25,17 @@ class Player {
     this.quests         = [];   // active quests: { type, targetType, count, progress, id }
 
     this.tempBonuses    = {};   // {stat: value} — consumed after one roll per stat
+    this.priestBuff     = 0;   // +N to ALL stats for exactly one roll (from Priest tile item)
     this.transmutation  = null; // { from:'M', to:'F' } active for current fight
     this.hasPrincess    = false;
+    this.guildItemLevels = {}; // itemId → { itemLevel:1..6, levelProgress:{ mbUnits, secondaryUnits } }
     this.isAlive        = true;
     this.isSmokeActive  = false; // immune to attacks this turn
     this.chainedTurns   = 0;    // turns remaining where player cannot escape
-    this.usedTiles      = new Set(); // "x,y" keys of tiles already used this cycle
+    this.usedTiles          = new Set(); // "x,y" keys of tiles already used this cycle
+    this.xp                 = { F:0, D:0, A:0, M:0, C:0, V:0 };
+    this.masterSkillsBought = 0;
+    this.dialogueSkillsGained = 0;
   }
 
   // ── Stats ────────────────────────────────────────────────────────────────
@@ -69,15 +74,33 @@ class Player {
     // One-roll temp bonus (potions used in combat)
     value += this.tempBonuses[resolvedStat] ?? 0;
 
+    // Priest blessing: +N to ALL stats, consumed on the very next roll
+    value += this.priestBuff ?? 0;
+
+    // Guild item level bonus: each level above 1 adds +1 to the item's boosted stat
+    for (const s of ALL_SLOTS) {
+      const eItem = this.equipped[s];
+      if (!eItem?.guild) continue;
+      const lvlData = this.guildItemLevels[eItem.id];
+      if (!lvlData || lvlData.itemLevel <= 1) continue;
+      const boostedStat = Object.keys(eItem.statBonus ?? {})[0];
+      if (boostedStat === resolvedStat) value += lvlData.itemLevel - 1;
+    }
+
     return Math.max(0, value);
   }
 
   addTempBonus(stat, value) {
-    this.tempBonuses[stat] = (this.tempBonuses[stat] ?? 0) + value;
+    if (this.tempBonuses[stat] === undefined) this.tempBonuses[stat] = value;
+  }
+
+  hasTempBonus(stat) {
+    return this.tempBonuses[stat] !== undefined;
   }
 
   consumeTempBonus(stat) {
     delete this.tempBonuses[stat];
+    this.priestBuff = 0; // priest blessing is consumed on the first roll that uses any stat
   }
 
   getDefenseStat(attackType) {
@@ -140,6 +163,22 @@ class Player {
       if (item?.enchantment?.id === enchantId) return item.enchantment.tier ?? 1;
     }
     return 0;
+  }
+
+  // ── Guild item levels ─────────────────────────────────────────────────────
+
+  initGuildItemLevel(itemId) {
+    if (!this.guildItemLevels[itemId]) {
+      this.guildItemLevels[itemId] = { itemLevel: 1, levelProgress: { mbUnits: 0, secondaryUnits: 0 } };
+    }
+  }
+
+  removeGuildItemLevel(itemId) {
+    delete this.guildItemLevels[itemId];
+  }
+
+  getGuildItemLevel(itemId) {
+    return this.guildItemLevels[itemId] ?? null;
   }
 
   applyEnchantment(slot, enchantment, tier) {
@@ -230,6 +269,7 @@ class Player {
     this.transmutation = null;
     this.isSmokeActive = false;
     this.tempBonuses   = {};
+    this.priestBuff    = 0;
   }
 
   // ── Tile memory ──────────────────────────────────────────────────────────
@@ -237,6 +277,24 @@ class Player {
   hasUsedTile(x, y)  { return this.usedTiles.has(`${x},${y}`); }
   markTileUsed(x, y) { this.usedTiles.add(`${x},${y}`); }
   refreshTiles()     { this.usedTiles.clear(); }
+
+  // ── XP ───────────────────────────────────────────────────────────────────
+
+  // Grants XP to stat. Threshold = baseStat × 10. Levels up and carries over excess.
+  gainXP(stat, amount) {
+    if (!(stat in this.xp)) return false;
+    this.xp[stat] += amount;
+    const threshold = this.baseStats[stat] * 10;
+    if (this.xp[stat] >= threshold) {
+      this.xp[stat] -= threshold;
+      this.baseStats[stat]++;
+      if (typeof Game !== 'undefined') {
+        Game.emit('xp_levelup', { player: this.name, stat, newValue: this.baseStats[stat] });
+      }
+      return true;
+    }
+    return false;
+  }
 
   // ── Movement ─────────────────────────────────────────────────────────────
 

@@ -31,7 +31,7 @@ const Movement = (() => {
           // Uncleared miniboss and boss tiles block further BFS expansion.
           // A miniboss the player already defeated is treated as a normal path tile.
           const blocksExpansion = nbType === TileType.BOSS
-            || (nbType === TileType.MINIBOSS && !player.hasUsedTile(nb.x, nb.y));
+            || (nbType === TileType.MINIBOSS && !player.hasUsedTile(nb.x, nb.y) && !player.hasEquipped('invis_cloak'));
           if (!blocksExpansion) {
             if (onSecret) queue.unshift({ x: nb.x, y: nb.y, steps: newSteps });
             else          queue.push   ({ x: nb.x, y: nb.y, steps: newSteps });
@@ -87,7 +87,7 @@ const Movement = (() => {
           }
           const nbType = MapGrid.get(nb.x, nb.y);
           const blocksExpansion = nbType === TileType.BOSS
-            || (nbType === TileType.MINIBOSS && !player.hasUsedTile(nb.x, nb.y));
+            || (nbType === TileType.MINIBOSS && !player.hasUsedTile(nb.x, nb.y) && !player.hasEquipped('invis_cloak'));
           if (!blocksExpansion) {
             if (onSecret) queue.unshift({ x: nb.x, y: nb.y, steps: newSteps });
             else          queue.push   ({ x: nb.x, y: nb.y, steps: newSteps });
@@ -122,7 +122,7 @@ const Movement = (() => {
           visited.set(key, newSteps);
           const nbType = MapGrid.get(nb.x, nb.y);
           const blocksExpansion = nbType === TileType.BOSS
-            || (nbType === TileType.MINIBOSS && !player.hasUsedTile(nb.x, nb.y))
+            || (nbType === TileType.MINIBOSS && !player.hasUsedTile(nb.x, nb.y) && !player.hasEquipped('invis_cloak'))
             || (nbType === TileType.STOP     && !player.hasUsedTile(nb.x, nb.y));
           if (!blocksExpansion) {
             if (onSecret) queue.unshift({ x: nb.x, y: nb.y, steps: newSteps });
