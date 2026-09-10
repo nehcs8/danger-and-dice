@@ -27,6 +27,7 @@ class Player {
     this.tempBonuses    = {};   // {stat: value} — consumed after one roll per stat
     this.priestBuff     = 0;   // +N to ALL stats for exactly one roll (from Priest tile item)
     this.transmutation  = null; // { from:'M', to:'F' } active for current fight
+    this.halfUsedSpells = new Set(); // spellIds used once with Cursed Ring (consumed on 2nd use)
     this.hasPrincess    = false;
     this.guildItemLevels = {}; // itemId → { itemLevel:1..6, levelProgress:{ mbUnits, secondaryUnits } }
     this.isAlive        = true;
@@ -201,7 +202,6 @@ class Player {
   hasItem(itemId) { return this.inventory.includes(itemId); }
 
   hasCombatAttackSpell() {
-    if (this.hasEquipped('cursed_ring')) return true;
     return this.inventory.some(id => {
       const item = getItem(id);
       return item && item.subtype === 'attack';
@@ -213,8 +213,7 @@ class Player {
   }
 
   canAttackMagic() {
-    return this.hasEquipped('cursed_ring') ||
-           this.inventory.some(id => getItem(id)?.subtype === 'attack');
+    return this.inventory.some(id => getItem(id)?.subtype === 'attack');
   }
 
   canDefendMagic() {
@@ -258,18 +257,20 @@ class Player {
 
   tickStatusEffects() {
     this.statusEffects = this.statusEffects
-      .map(e => ({ ...e, turnsLeft: e.turnsLeft - 1 }))
+      .map(e => e.skipFirstTick ? { ...e, skipFirstTick: false } : { ...e, turnsLeft: e.turnsLeft - 1 })
       .filter(e => e.turnsLeft > 0);
     this.isSmokeActive = false;
     if (this.chainedTurns > 0) this.chainedTurns--;
   }
 
   clearFightEffects() {
-    this.statusEffects = this.statusEffects.filter(e => e.persistent);
-    this.transmutation = null;
-    this.isSmokeActive = false;
-    this.tempBonuses   = {};
-    this.priestBuff    = 0;
+    this.statusEffects  = this.statusEffects.filter(e => e.persistent);
+    this.transmutation  = null;
+    this.isSmokeActive  = false;
+    this.tempBonuses    = {};
+    this.priestBuff     = 0;
+    this.combatXpHits   = 0;
+    this.halfUsedSpells = new Set();
   }
 
   // ── Tile memory ──────────────────────────────────────────────────────────

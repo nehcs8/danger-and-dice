@@ -176,5 +176,13 @@ const Renderer = (() => {
     return { x, y };
   }
 
-  return { init, draw, tileAt };
+  // Like tileAt but without the walkability filter — used for tooltips.
+  function coordsAt(canvasX, canvasY) {
+    const x = Math.floor((canvasX - PAD) / TILE);
+    const y = Math.floor((canvasY - PAD) / TILE);
+    if (x < 0 || x >= MapGrid.WIDTH || y < 0 || y >= MapGrid.HEIGHT) return null;
+    return { x, y };
+  }
+
+  return { init, draw, tileAt, coordsAt };
 })();

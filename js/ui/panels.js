@@ -18,25 +18,33 @@ const Panels = (() => {
   function specialItemEffectDesc(effect) {
     if (typeof effect !== 'string') return '';
     switch (effect) {
-      case 'kryss':               return 'Roll >3 at fight start: enemy −1 heart before combat';
+      case 'kryss':               return 'Automatically strikes enemy for 1 heart before combat starts';
       case 'garrote_kill':        return 'F attacks auto-kill enemies with ≤2 hearts (no roll needed)';
       case 'skip_miniboss':       return 'Can pass through miniboss tiles without fighting';
       case 'double_magicvalue':   return 'Magic spell bonus (magicValue) is doubled';
-      case 'magic_no_spell':      return 'Can use magic attacks without owning a spell';
-      case 'charisma_damage':     return 'Charisma successes deal 1 damage to the enemy';
-      case 'dex_first':           return 'DEX attacks always go first regardless of initiative';
+      case 'spell_twice':         return 'Each spell in inventory can be cast twice before being consumed';
+      case 'charisma_damage':     return 'Charisma successes automatically deal 1 damage; unlocks tier-3 Kill option';
+      case 'immune_charisma':     return 'Enemy cannot target you with Charisma attacks';
       case 'always_escape':       return 'Can always escape from combat (reusable)';
-      case 'coins_plus3':         return '+3 coins added to every enemy kill reward';
+      case 'coins_plus15':        return '+15 coins added to every enemy kill reward';
       case 'sell_75pct':          return 'Sell items for 75% of buy price instead of 50%';
       case 'double_chest':        return 'Roll chest twice — choose which result to keep';
       case 'all_drops':           return 'All loot items drop in double quantity';
-      case 'bard_lv2_free':       return 'Unlock tier-2 charisma options without the diff requirement';
+      case 'bard_lv8_free':       return 'C stat can be raised to 8 at Master; all charisma tiers unlocked freely';
       case 'deceive_double_coins':return 'Charisma "deceive" outcomes yield double coins';
-      case 'coins_times3':        return 'Coins earned from kills are tripled';
+      case 'coins_times2':        return 'Coins earned from kills are doubled';
       case 'pickpocket':          return 'Successful DEX attacks also steal 2×d6 coins';
       case 'pass_obstacles':      return 'Can walk secret paths without Compass';
       default: return '';
     }
+  }
+
+  function statBonusDesc(item) {
+    const sb = item.statBonus;
+    if (!sb) return '';
+    return Object.entries(sb)
+      .map(([stat, val]) => (val >= 0 ? `+${val}` : `\u2212${Math.abs(val)}`) + stat)
+      .join(' ');
   }
 
   function spellDesc(item) {
@@ -58,7 +66,7 @@ const Panels = (() => {
       sp_transmutation: 'Swap two stats for the whole fight',
       sp_smoke:         'Immune to next mob attack (consumed)',
       sp_disenchant:    'Remove enchantment from an item',
-      sp_curse:         'Unknown effect',
+      sp_curse:         'Reduce a mob stat by d6 for 4 turns — pick the stat (combat only)',
     };
     return utilDesc[item.id] ?? '';
   }
@@ -97,11 +105,15 @@ const Panels = (() => {
       refreshSpellPanel(true);
     });
 
+    _el('btn-curse-cancel').addEventListener('click', () => {
+      refreshSpellPanel(true);
+    });
+
     Game.on('item_used', () => {
       if (Game.getState().phase === Game.Phase.COMBAT) {
         refreshCombatConsumables();
         refreshCombatPlayerStats();
-        refreshSpellPanel(Game.getState().combatSubPhase === 'player_attack');
+        refreshSpellPanel(Game.getState().pendingCombat?.combatSubPhase === 'player_attack');
       }
     });
 
@@ -122,16 +134,29 @@ const Panels = (() => {
     Game.on('combat_update', data => {
       const logEl = _el('combat-log');
       if (!logEl) return;
-      (data.newLog ?? []).forEach(line => {
+      const emitColor = data.logType === 'curse' ? '#c470e0'
+                      : data.logType === 'bard'  ? '#ffd080'
+                      : null;
+      (data.newLog ?? []).forEach(entry => {
         const d = document.createElement('div');
-        d.textContent = line;
+        if (entry !== null && typeof entry === 'object') {
+          d.textContent = entry.text;
+          d.style.color = entry.type === 'enchant' ? '#ff9944'
+                        : entry.type === 'curse'   ? '#c470e0'
+                        : entry.type === 'bard'    ? '#ffd080'
+                        : '';
+        } else {
+          d.textContent = entry;
+          if (emitColor) d.style.color = emitColor;
+        }
         logEl.appendChild(d);
       });
       logEl.scrollTop = logEl.scrollHeight;
 
-      const mobHeartsEl = _el('combat-enemy-info')?.querySelector('.combat-hearts');
-      if (mobHeartsEl && data.mob) {
-        mobHeartsEl.textContent = `❤ ${data.mob.hearts.current}/${data.mob.hearts.max}`;
+      if (data.mob) {
+        const mobHeartsEl = _el('combat-enemy-info')?.querySelector('.combat-hearts');
+        if (mobHeartsEl) mobHeartsEl.textContent = `❤ ${data.mob.hearts.current}/${data.mob.hearts.max}`;
+        refreshCombatMobStats(data.mob);
       }
 
       refreshCombatPlayerStats();
@@ -211,6 +236,9 @@ const Panels = (() => {
       case Game.Phase.TELEPORT_CHOICE:
         showTeleportChoice(data);
         break;
+      case Game.Phase.KING_BATTLE:
+        KingPanel.show();
+        break;
     }
   }
 
@@ -223,10 +251,36 @@ const Panels = (() => {
   }
 
   // ── Combat ────────────────────────────────────────────────────────────────
-  // Format a mob stat with its dice roll range in small text.
-  // Mob roll formula: stat − 3 + d6, so range is [stat−2, stat+3].
-  function mobStatCell(val) {
-    return `${val} <span style="color:#888;font-size:0.78em">[${val - 2}~${val + 3}]</span>`;
+  // Compute effective mob stat (base + active status effects).
+  function getMobEffectiveStat(mob, stat) {
+    let v = mob.stats[stat] ?? 0;
+    for (const e of (mob.statusEffects ?? [])) {
+      if (e.stat === stat) v += e.value ?? 0;
+    }
+    return Math.max(0, v);
+  }
+
+  // Format a mob stat cell. Colors the value if it differs from base due to status effects.
+  // Mob roll formula: stat − 3 + d6, so range is [eff−2, eff+3].
+  function mobStatCell(base, eff) {
+    const diff = eff - base;
+    const numStr = diff > 0
+      ? `<span style="color:#9eff9e;font-weight:bold">${eff}</span>`
+      : diff < 0
+      ? `<span style="color:#ff9e9e;font-weight:bold">${eff}</span>`
+      : `${eff}`;
+    return `${numStr} <span style="color:#888;font-size:0.78em">[${eff - 2}~${eff + 3}]</span>`;
+  }
+
+  function refreshCombatMobStats(mob) {
+    if (!mob) return;
+    const tableEl = _el('combat-enemy-info')?.querySelector('.stats-table');
+    if (!tableEl) return;
+    const s = (k) => mobStatCell(mob.stats[k] ?? 0, getMobEffectiveStat(mob, k));
+    tableEl.innerHTML =
+      `<tr><td>STR</td><td>${s('F')}</td><td>DEX</td><td>${s('D')}</td></tr>
+       <tr><td>ARM</td><td>${s('A')}</td><td>MAG</td><td>${s('M')}</td></tr>
+       <tr><td>CHA</td><td>${s('C')}</td><td>SPD</td><td>${s('V')}</td></tr>`;
   }
 
   function showCombat(data) {
@@ -234,13 +288,14 @@ const Panels = (() => {
     const player = Game.getCurrentPlayer();
     const mob    = data.mob ?? data.defender;
 
+    const ms = mob ? (k) => mobStatCell(mob.stats[k] ?? 0, getMobEffectiveStat(mob, k)) : null;
     _el('combat-enemy-info').innerHTML = mob
       ? `<strong>${mob.name}</strong>
          <div class="combat-hearts">❤ ${mob.hearts.current}/${mob.hearts.max}</div>
          <table class="stats-table">
-           <tr><td>STR</td><td>${mobStatCell(mob.stats.F)}</td><td>DEX</td><td>${mobStatCell(mob.stats.D)}</td></tr>
-           <tr><td>ARM</td><td>${mobStatCell(mob.stats.A)}</td><td>MAG</td><td>${mobStatCell(mob.stats.M)}</td></tr>
-           <tr><td>CHA</td><td>${mobStatCell(mob.stats.C)}</td><td>SPD</td><td>${mobStatCell(mob.stats.V)}</td></tr>
+           <tr><td>STR</td><td>${ms('F')}</td><td>DEX</td><td>${ms('D')}</td></tr>
+           <tr><td>ARM</td><td>${ms('A')}</td><td>MAG</td><td>${ms('M')}</td></tr>
+           <tr><td>CHA</td><td>${ms('C')}</td><td>SPD</td><td>${ms('V')}</td></tr>
          </table>`
       : '';
 
@@ -259,9 +314,17 @@ const Panels = (() => {
     // Populate initial fight log (Kryss + initiative lines, maybe mob's first attack)
     const logEl = _el('combat-log');
     logEl.innerHTML = '';
-    (data.fightLog ?? []).forEach(line => {
+    (data.fightLog ?? []).forEach(entry => {
       const d = document.createElement('div');
-      d.textContent = line;
+      if (entry !== null && typeof entry === 'object') {
+        d.textContent = entry.text;
+        d.style.color = entry.type === 'enchant' ? '#ff9944'
+                      : entry.type === 'curse'   ? '#c470e0'
+                      : entry.type === 'bard'    ? '#ffd080'
+                      : '';
+      } else {
+        d.textContent = entry;
+      }
       logEl.appendChild(d);
     });
     logEl.scrollTop = logEl.scrollHeight;
@@ -425,7 +488,7 @@ const Panels = (() => {
   // ── Combat extra panel helpers ────────────────────────────────────────────
   // Switch which panel is visible inside #combat-extra.
   function showExtraPanel(panelId) {
-    ['spell-panel', 'charisma-picker', 'transmutation-picker'].forEach(id => {
+    ['spell-panel', 'charisma-picker', 'transmutation-picker', 'curse-picker'].forEach(id => {
       _el(id)?.classList.toggle('hidden', id !== panelId);
     });
   }
@@ -466,6 +529,7 @@ const Panels = (() => {
   function showCharismaPicker(charismaResult) {
     const { diff, playerRoll, mobC, pendingLoot } = charismaResult;
     const picker = _el('charisma-picker');
+    const player = Game.getCurrentPlayer();
 
     _el('charisma-sub-swap').classList.add('hidden');
     _el('charisma-sub-stat').classList.add('hidden');
@@ -497,7 +561,9 @@ const Panels = (() => {
       return;
     }
 
-    const maxTier = diff >= 7 ? 3 : diff >= 5 ? 2 : 1;
+    const hasFlute = player?.hasEquipped('magic_flute_thief');
+    const maxTier = hasFlute ? 3 : diff >= 7 ? 3 : diff >= 5 ? 2 : 1;
+    const hasRattle = player?.hasEquipped('cursed_rattle');
 
     const families = [
       { key:'friendly', label:'Friendly', color:'#3a8a3a', options:[
@@ -524,6 +590,9 @@ const Panels = (() => {
         { tier:2, label:'Quest', desc:'Receive a quest, end encounter' },
         { tier:3, label:'Learn', desc:'+1 random stat (max 8), end encounter' },
       ]},
+      ...(hasRattle && maxTier >= 3 ? [{ key:'kill', label:'Kill (Rattle)', color:'#8a1a1a', options:[
+        { tier:1, label:'Execute', desc:'Instantly kill the enemy' },
+      ]}] : []),
     ];
 
     families.forEach(fam => {
@@ -732,6 +801,24 @@ const Panels = (() => {
     showExtraPanel('transmutation-picker');
   }
 
+  function showCursePicker() {
+    const stats  = ['F','D','A','M','C','V'];
+    const labels = { F:'STR', D:'DEX', A:'ARM', M:'MAG', C:'CHA', V:'SPD' };
+    const list   = _el('curse-stat-list');
+    list.innerHTML = '';
+    stats.forEach(s => {
+      const btn = document.createElement('button');
+      btn.textContent = labels[s];
+      btn.style.cssText = 'padding:4px 6px;background:#3a1a3a;color:#fff;border:1px solid #c060c0;border-radius:4px;cursor:pointer';
+      btn.addEventListener('click', () => {
+        showExtraPanel('spell-panel');
+        Game.submitAction({ type: 'use_curse', stat: s });
+      });
+      list.appendChild(btn);
+    });
+    showExtraPanel('curse-picker');
+  }
+
   function renderTransmutationStats(exclude, onSelect) {
     const stats  = ['F','D','A','M','C','V'];
     const labels = { F:'STR', D:'DEX', A:'ARM', M:'MAG', C:'CHA', V:'SPD' };
@@ -747,7 +834,7 @@ const Panels = (() => {
   }
 
   // ── Combat consumables ────────────────────────────────────────────────────
-  const NON_COMBAT_IDS       = new Set(['sp_invisibility','sp_teleport','sp_disenchant','sp_curse']);
+  const NON_COMBAT_IDS       = new Set(['sp_invisibility','sp_teleport','sp_disenchant']);
   const NON_COMBAT_OBJ_TYPES = new Set(['escape','prevent_escape','fast_travel','choose_category','place_trap']);
 
   function refreshCombatConsumables() {
@@ -773,6 +860,11 @@ const Panels = (() => {
         div.innerHTML = `<span>${label}</span>
           <button class="inv-equip-btn">Transmute</button>`;
         div.querySelector('button').addEventListener('click', showTransmutationPicker);
+      } else if (id === 'sp_curse') {
+        const alreadyUsed = !!Game.getState().pendingCombat?.curseUsedThisTurn;
+        div.innerHTML = `<span>${label}</span>
+          <button class="inv-equip-btn" ${alreadyUsed ? 'disabled' : ''}>Curse</button>`;
+        if (!alreadyUsed) div.querySelector('button').addEventListener('click', showCursePicker);
       } else {
         div.innerHTML = `<span>${label}</span>
           <button class="inv-equip-btn"
@@ -806,6 +898,12 @@ const Panels = (() => {
     if (shopHeader) shopHeader.innerHTML =
       `Shop <span style="float:right;color:#ffd700">💰 ${player.coins}</span>`;
 
+    // Resolve shop stock for the current tile
+    const shopPos   = Game.getState().currentShopPosition;
+    const shopStock = shopPos
+      ? (Game.getState().shopStocks[`${shopPos.x},${shopPos.y}`] ?? null)
+      : null;
+
     let catalog;
     if (guildType === 'assassin') {
       catalog = SPECIAL_EQUIPMENT.filter(i => i.guild === 'assassin');
@@ -818,17 +916,26 @@ const Panels = (() => {
     const buyList = _el('shop-buy-list');
     buyList.innerHTML = '';
     catalog.forEach(item => {
-      const affordable = player.coins >= (item.buyPrice ?? 0);
+      if (shopStock && shopStock[item.id] === undefined) return; // not stocked at this shop
+      const qty        = shopStock?.[item.id] ?? null;
+      const inStock    = qty === null || qty > 0;
+      const affordable = inStock && player.coins >= (item.buyPrice ?? 0);
       const effDesc    = specialItemEffectDesc(item.effect);
+      const sbDesc     = statBonusDesc(item);
+      const descParts  = [sbDesc, effDesc].filter(Boolean).join(' · ');
+      const stockBadge = qty !== null && inStock
+        ? ` <em style="color:#666;font-size:0.75em">(${qty})</em>` : '';
       const div = document.createElement('div');
-      div.className = `shop-item ${affordable ? '' : 'too-expensive'}`;
+      div.className = `shop-item ${!inStock ? 'sold-out' : affordable ? '' : 'too-expensive'}`;
       div.innerHTML =
-        `<span>${item.name}${effDesc ? `<br><em style="font-size:0.8em;color:#aaa">${effDesc}</em>` : ''}</span>
-         <span>${item.buyPrice}💰</span>
-         <button data-id="${item.id}" ${affordable ? '' : 'disabled'}>Buy</button>`;
-      div.querySelector('button').addEventListener('click', () =>
-        Game.submitAction({ type: 'buy', itemId: item.id })
-      );
+        `<span>${item.name}${descParts ? `<br><em style="font-size:0.8em;color:#aaa">${descParts}</em>` : ''}</span>
+         <span>${item.buyPrice}💰${stockBadge}</span>
+         <button data-id="${item.id}" ${inStock && affordable ? '' : 'disabled'}>${inStock ? 'Buy' : 'Sold'}</button>`;
+      if (inStock) {
+        div.querySelector('button').addEventListener('click', () =>
+          Game.submitAction({ type: 'buy', itemId: item.id })
+        );
+      }
       buyList.appendChild(div);
     });
 
@@ -945,18 +1052,40 @@ const Panels = (() => {
     // Master also sells spells
     const buyEl = _el('master-buy-list');
     buyEl.innerHTML = '<h3>Buy Spells / Magical Items</h3>';
+    const gs = Game.getState();
+    const MASTER_LIMITED_KEYS = {
+      sp_smoke: { stockKey: 'masterSmokeStock', resetKey: 'masterSmokeStockResetTurn' },
+      sp_curse: { stockKey: 'masterCurseStock', resetKey: 'masterCurseStockResetTurn' },
+    };
+    function getMasterStock(itemId) {
+      const keys = MASTER_LIMITED_KEYS[itemId];
+      if (!keys) return null;
+      const restocked = gs.turnNumber - gs[keys.resetKey] >= 15;
+      const avail     = restocked ? 10 : gs[keys.stockKey];
+      const turns     = restocked ? 0  : 15 - (gs.turnNumber - gs[keys.resetKey]);
+      return { avail, turns, soldOut: avail <= 0 };
+    }
     [...COMBAT_SPELLS, ...UTILITY_SPELLS].forEach(item => {
-      const affordable = player.coins >= (item.buyPrice ?? 0);
+      const limited    = getMasterStock(item.id);
+      const soldOut    = limited?.soldOut ?? false;
+      const affordable = !soldOut && player.coins >= (item.buyPrice ?? 0);
       const desc = spellDesc(item);
+      const stockInfo = limited
+        ? (soldOut
+            ? `<em style="color:#c66;font-size:0.75em">Sold out — restocks in ${limited.turns} turn${limited.turns !== 1 ? 's' : ''}</em>`
+            : `<em style="color:#888;font-size:0.75em">${limited.avail}/10 in stock</em>`)
+        : `<em style="color:#555;font-size:0.75em">∞ in stock</em>`;
       const div = document.createElement('div');
-      div.className = `shop-item ${affordable ? '' : 'too-expensive'}`;
+      div.className = `shop-item ${soldOut ? 'sold-out' : affordable ? '' : 'too-expensive'}`;
       div.innerHTML =
-        `<span>${item.name}${desc ? `<br><em style="font-size:0.75em;color:#888">${desc}</em>` : ''}</span>
+        `<span>${item.name}${desc ? `<br><em style="font-size:0.75em;color:#888">${desc}</em>` : ''}<br>${stockInfo}</span>
          <span>${item.buyPrice}💰</span>
-         <button ${affordable ? '' : 'disabled'}>Buy</button>`;
-      div.querySelector('button').addEventListener('click', () =>
-        Game.submitAction({ type: 'buy', itemId: item.id })
-      );
+         <button ${affordable ? '' : 'disabled'}>${soldOut ? 'Sold' : 'Buy'}</button>`;
+      if (!soldOut) {
+        div.querySelector('button').addEventListener('click', () =>
+          Game.submitAction({ type: 'buy', itemId: item.id })
+        );
+      }
       buyEl.appendChild(div);
     });
   }
@@ -1050,9 +1179,109 @@ const Panels = (() => {
 
     const recap = _el('gameover-recap');
     recap.innerHTML = '';
+    const summary = SpectateStats.isActive() ? SpectateStats.getRunSummary() : null;
     if (data.winner && SpectateStats.isActive()) {
       recap.appendChild(SpectateStats.renderRecap(data.winner));
     }
+
+    // Guild weapon mastery section
+    const guildDiv = _el('gameover-guild');
+    guildDiv.innerHTML = '';
+    if (summary) {
+      const rows = [];
+      Object.entries(summary.players).forEach(([name, pd]) => {
+        pd.guildLevelSix.forEach(g => {
+          rows.push({ name, ...g });
+        });
+      });
+      if (rows.length > 0) {
+        const title = document.createElement('div');
+        title.className = 'recap-section-title guild-mastery-title';
+        title.textContent = 'Guild Weapon Mastery';
+        guildDiv.appendChild(title);
+        const list = document.createElement('div');
+        list.className = 'guild-mastery-list';
+        rows.forEach(r => {
+          const row = document.createElement('div');
+          row.className = 'guild-mastery-row';
+          row.innerHTML =
+            `<span class="milestone-turn">Turn\u00a0${r.turn}</span>` +
+            `<span class="guild-mastery-name">${r.name}</span>` +
+            `<span class="guild-mastery-item">${r.itemName}</span>` +
+            `<span class="guild-mastery-stat">${r.stat}\u00a0=\u00a06</span>`;
+          list.appendChild(row);
+        });
+        guildDiv.appendChild(list);
+      }
+    }
+
+    // Save section
+    _buildSaveSection(_el('gameover-save'), data, summary);
+  }
+
+  function _buildSaveSection(container, data, summary) {
+    container.innerHTML = '';
+
+    const runNum = (parseInt(localStorage.getItem('dandd_run_count') ?? '0', 10) + 1);
+
+    const nameRow = document.createElement('div');
+    nameRow.className = 'save-name-row';
+    const nameLabel = document.createElement('label');
+    nameLabel.className = 'save-label';
+    nameLabel.textContent = `Run #${runNum} — name:`;
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'run-name-input';
+    nameInput.placeholder = 'optional';
+    nameRow.appendChild(nameLabel);
+    nameRow.appendChild(nameInput);
+    container.appendChild(nameRow);
+
+    const commentLabel = document.createElement('div');
+    commentLabel.className = 'save-label';
+    commentLabel.textContent = 'Notes:';
+    container.appendChild(commentLabel);
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'run-comment';
+    textarea.rows = 4;
+    textarea.placeholder = 'Write your thoughts about this run…';
+    container.appendChild(textarea);
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'btn-save-run';
+    saveBtn.textContent = `Save Run #${runNum}`;
+    saveBtn.addEventListener('click', () => {
+      _saveRunToFile(data, summary, runNum, nameInput.value.trim(), textarea.value.trim());
+      saveBtn.textContent = 'Saved!';
+      saveBtn.disabled = true;
+    });
+    container.appendChild(saveBtn);
+  }
+
+  function _saveRunToFile(data, summary, runNum, runName, comment) {
+    const record = {
+      runNumber: runNum,
+      runName: runName || null,
+      winner: data.winner ?? null,
+      comment: comment || null,
+      ...(summary ?? {}),
+    };
+
+    const safeName = runName
+      ? `_${runName.replace(/[^a-zA-Z0-9_-]/g, '_')}`
+      : '';
+    const fileName = `danger_and_dice_run_${runNum}${safeName}.json`;
+
+    const blob = new Blob([JSON.stringify(record, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    localStorage.setItem('dandd_run_count', String(runNum));
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1064,6 +1293,7 @@ const Panels = (() => {
   function hideAll() {
     document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
     _el('overlay').classList.add('hidden');
+    if (typeof KingPanel !== 'undefined') KingPanel.hide();
   }
 
   function _el(id) { return document.getElementById(id); }

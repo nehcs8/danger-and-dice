@@ -22,6 +22,7 @@ const Game = (() => {
     MAP_CHOICE:      'map_choice',
     LOOT_CONFIRM:    'loot_confirm',
     TELEPORT_CHOICE: 'teleport_choice',
+    KING_BATTLE:     'king_battle',
     GAME_OVER:       'game_over',
   };
 
@@ -39,6 +40,7 @@ const Game = (() => {
     princess:         { x: null, y: null, carriedBy: null },
     pvpActive:        false,
     dragonDefeated:   false,
+    defeatedBosses:   new Set(),
     winner:           null,
     pendingCombat:        null,   // { mob, isBoss, isPvp }
     pendingChest:         null,   // { tier }
@@ -48,6 +50,13 @@ const Game = (() => {
     mapForcedRoll:          null, // 1-6 chosen by player when using Map item
     mapChoiceShown:         false,// prevents re-entry into MAP_CHOICE
     teleportReturnPhase:    null, // phase to restore if teleport is cancelled
+    shopStocks:             {},   // keyed by "x,y" → { itemId: 1 } (0/missing = sold out)
+    currentShopPosition:    null, // { x, y } of the shop tile the current player is visiting
+    rerollUsedThisTurn:     new Set(), // "x,y" keys of reroll tiles already triggered this turn
+    masterSmokeStock:       10,   // Smoke spell stock at the Master (resets every 15 turns)
+    masterSmokeStockResetTurn: 0, // turnNumber when smoke stock was last reset
+    masterCurseStock:       10,   // Curse spell stock at the Master (resets every 15 turns)
+    masterCurseStockResetTurn: 0, // turnNumber when curse stock was last reset
   };
 
   // ── Event bus ─────────────────────────────────────────────────────────────
@@ -146,6 +155,35 @@ const Game = (() => {
     return bestTier;
   }
 
+  // Build (once) and return the stock object for a shop tile.
+  // Each entry is itemId → 1 (available). Buying sets it to 0 (sold out).
+  function generateShopStock(x, y, guildType) {
+    const key = `${x},${y}`;
+    if (state.shopStocks[key]) return state.shopStocks[key];
+
+    let items;
+    let qty = 1;
+    if (guildType === 'assassin') {
+      items = SPECIAL_EQUIPMENT.filter(i => i.guild === 'assassin');
+    } else if (guildType === 'thief') {
+      items = SPECIAL_EQUIPMENT.filter(i => i.guild === 'thief');
+    } else {
+      const zone = zoneTierAt(x, y);
+      let minTier, maxTier;
+      if (zone <= 0)      { minTier = 1; maxTier = 3; qty = 3; }
+      else if (zone === 1) { minTier = 2; maxTier = 4; }
+      else                 { minTier = 5; maxTier = 6; }
+      const equipment = EQUIPMENT.filter(i => i.tier >= minTier && i.tier <= maxTier);
+      items = [...equipment, ...POTIONS, ...OBJECTS];
+    }
+
+    const potionIds = new Set([...POTIONS, ...COMBAT_SPELLS, ...UTILITY_SPELLS].map(i => i.id));
+    const stock = {};
+    for (const item of items) stock[item.id] = potionIds.has(item.id) ? 10 : qty;
+    state.shopStocks[key] = stock;
+    return stock;
+  }
+
   function calcInventoryWeight(player) {
     let w = 0;
     for (const slot of ALL_SLOTS) {
@@ -190,6 +228,10 @@ const Game = (() => {
     state.currentIdx   = 0;
     state.turnNumber   = 0;
     state.difficulty   = difficulty;
+    state.masterSmokeStock          = 10;
+    state.masterSmokeStockResetTurn = 0;
+    state.masterCurseStock          = 10;
+    state.masterCurseStockResetTurn = 0;
     state.phase = Phase.SETUP_ROLL;
     emit('state_change', { phase: state.phase, setupRollIdx: 0, player: state.players[0].name });
   }
@@ -256,6 +298,7 @@ const Game = (() => {
     // Pick up princess if already standing on her tile when turn begins
     if (state.pvpActive && !state.princess.carriedBy) pickUpPrincess(player);
 
+    state.rerollUsedThisTurn = new Set();
     state.phase = Phase.ROLL_MOVE;
     emit('state_change', { phase: state.phase, player: player.name });
   }
@@ -300,6 +343,8 @@ const Game = (() => {
         if (action?.type === 'attack' || action?.type === 'bail' || action?.type === 'run' ||
             action?.type === 'bard'   || action?.type === 'defend') {
           handleCombatAction(action);
+        } else if (action?.type === 'use_curse') {
+          handleCurse(action.stat);
         } else if (action?.type === 'transmute') {
           handleTransmute(action.from, action.to);
         } else if (action?.type === 'charisma_outcome') {
@@ -506,6 +551,13 @@ const Game = (() => {
         break;
 
       case TileType.REROLL: {
+        const rerollKey = `${x},${y}`;
+        if (state.rerollUsedThisTurn.has(rerollKey)) {
+          log(`${player.name} lands on a reroll tile already used this turn — turn ends`);
+          endTileInteraction();
+          break;
+        }
+        state.rerollUsedThisTurn.add(rerollKey);
         const extra = Movement.rollCap(player);
         log(`${player.name} rerolls — gains ${extra} extra movement`);
         state.movementCap     = extra;
@@ -547,8 +599,10 @@ const Game = (() => {
         emit('state_change', { phase: state.phase, player: player.name });
         break;
 
-      case TileType.SHOP:
+      case TileType.SHOP: {
         player.refreshTiles();
+        generateShopStock(x, y, null);
+        state.currentShopPosition = { x, y };
         state.phase = Phase.SHOP;
         emit('state_change', {
           phase: state.phase,
@@ -557,9 +611,11 @@ const Game = (() => {
           coins: player.coins,
         });
         break;
+      }
 
       case TileType.MASTER:
         player.refreshTiles();
+        state.currentShopPosition = null;
         state.phase = Phase.MASTER;
         emit('state_change', {
           phase: state.phase,
@@ -593,6 +649,11 @@ const Game = (() => {
         break;
 
       case TileType.BOSS: {
+        if (state.defeatedBosses.has(tData.bossId)) { log(`${player.name}: this boss has already been defeated.`); endTileInteraction(); break; }
+        if (tData.bossId === 'king') {
+          startKingBattle(player);
+          break;
+        }
         const mob = MOBS.spawn(tData.bossId);
         if (!mob) { endTileInteraction(); break; }
         startCombat(mob, true);
@@ -600,17 +661,21 @@ const Game = (() => {
       }
 
       case TileType.GUILD_ASSASSIN:
-      case TileType.GUILD_THIEF:
+      case TileType.GUILD_THIEF: {
         player.refreshTiles();
+        const guildType = tType === TileType.GUILD_ASSASSIN ? 'assassin' : 'thief';
+        generateShopStock(x, y, guildType);
+        state.currentShopPosition = { x, y };
         state.phase = Phase.SHOP;
         emit('state_change', {
           phase: state.phase,
           player: player.name,
-          guildType: tType === TileType.GUILD_ASSASSIN ? 'assassin' : 'thief',
+          guildType,
           inventory: player.inventory,
           coins: player.coins,
         });
         break;
+      }
 
       case TileType.FINISH:
         if (state.pvpActive && player.hasPrincess) {
@@ -788,13 +853,9 @@ const Game = (() => {
     if (player.hasEquipped('lucky_glove') && !hadMapRoll) {
       const roll2 = Dice.d6();
       log(`Lucky Glove: ${player.name} rolls ${roll1} and ${roll2}`);
-      if (roll1 === roll2) {
-        resolveChestRoll(player, roll1);
-      } else {
-        state.pendingChestRolls = [roll1, roll2];
-        state.phase = Phase.CHEST;
-        emit('state_change', { phase: Phase.CHEST, player: player.name, rolls: [roll1, roll2] });
-      }
+      state.pendingChestRolls = [roll1, roll2];
+      state.phase = Phase.CHEST;
+      emit('state_change', { phase: Phase.CHEST, player: player.name, rolls: [roll1, roll2] });
     } else {
       resolveChestRoll(player, roll1);
     }
@@ -848,6 +909,33 @@ const Game = (() => {
     if (player.coins < item.buyPrice) {
       emit('error', { message: 'Not enough coins' });
       return;
+    }
+    // Smoke and Curse have limited stock at the Master (10 per 15 turns)
+    const MASTER_LIMITED = {
+      sp_smoke: { stockKey: 'masterSmokeStock', resetKey: 'masterSmokeStockResetTurn', name: 'Smoke' },
+      sp_curse: { stockKey: 'masterCurseStock', resetKey: 'masterCurseStockResetTurn', name: 'Curse' },
+    };
+    if (MASTER_LIMITED[itemId] && !state.currentShopPosition) {
+      const { stockKey, resetKey, name } = MASTER_LIMITED[itemId];
+      if (state.turnNumber - state[resetKey] >= 15) {
+        state[stockKey] = 10;
+        state[resetKey] = state.turnNumber;
+      }
+      if (state[stockKey] <= 0) {
+        emit('error', { message: `${name} is sold out — restocks every 15 turns` });
+        return;
+      }
+      state[stockKey]--;
+    }
+    // Check shop stock — item must be available (stock >= 1)
+    if (state.currentShopPosition) {
+      const key   = `${state.currentShopPosition.x},${state.currentShopPosition.y}`;
+      const stock = state.shopStocks[key];
+      if (stock && !stock[itemId]) {
+        emit('error', { message: 'Item sold out' });
+        return;
+      }
+      if (stock) stock[itemId]--; // decrement stock
     }
     player.coins -= item.buyPrice;
     player.addItem(itemId);
@@ -908,7 +996,8 @@ const Game = (() => {
       emit('error', { message: 'Master skill purchase limit reached (5 total)' }); return;
     }
     const currentLv = player.baseStats[stat];
-    if (currentLv >= 6) { emit('error', { message: 'Stat already at maximum (6)' }); return; }
+    const statMax = (stat === 'C' && player.hasEquipped('magic_flute_thief')) ? 8 : 6;
+    if (currentLv >= statMax) { emit('error', { message: `Stat already at maximum (${statMax})` }); return; }
     const cost = 50;
     if (player.coins < cost) { emit('error', { message: 'Not enough coins' }); return; }
     player.coins -= cost;
@@ -930,6 +1019,39 @@ const Game = (() => {
     player.coins -= cost;
     log(`${player.name} enchants ${slot} with ${ench.name} (tier ${tier})`);
     emit('enchanted', { player: player.name, slot, enchantment: ench, tier });
+  }
+
+  // ── Curse ─────────────────────────────────────────────────────────────────
+  function handleCurse(stat) {
+    if (!state.pendingCombat) return;
+    if (state.pendingCombat.combatSubPhase !== 'player_attack') return;
+    const player = current();
+    if (!player.hasItem('sp_curse')) return;
+    if (state.pendingCombat.curseUsedThisTurn) {
+      log(`${player.name}: only one Curse per turn`); return;
+    }
+    const STAT_KEYS = ['F','D','A','M','C','V'];
+    if (!STAT_KEYS.includes(stat)) return;
+
+    const roll = Dice.d6();
+    const mob  = state.pendingCombat.mob;
+    mob.statusEffects = mob.statusEffects ?? [];
+    mob.statusEffects.push({ type: 'malus', stat, value: -roll, turnsLeft: 4 });
+    state.pendingCombat.curseUsedThisTurn = true;
+
+    player.removeItem('sp_curse');
+    const STAT_NAMES_LOCAL = { F:'STR', D:'DEX', A:'ARM', M:'MAG', C:'CHA', V:'SPD' };
+    const msg = `${player.name} curses ${mob.name} — ${STAT_NAMES_LOCAL[stat]} −${roll} for 4 turns`;
+    log(msg);
+    emit('item_used', { player: player.name, item: getItem('sp_curse') });
+    emit('combat_update', {
+      player: player.name,
+      mob,
+      newLog: [msg],
+      logType: 'curse',
+      outcome: 'ongoing',
+      combatSubPhase: 'player_attack',
+    });
   }
 
   // ── Transmutation ─────────────────────────────────────────────────────────
@@ -1016,6 +1138,10 @@ const Game = (() => {
       log(`${player.name}: use Transmutation from the combat menu`); return;
     }
 
+    if (eff === 'curse') {
+      log(`${player.name}: use Curse from the combat consumables menu`); return;
+    }
+
     if (eff === 'skip_fight') {
       log(`${player.name}: use Invisibility via the Bail button`); return;
     }
@@ -1082,7 +1208,14 @@ const Game = (() => {
   // ── Combat ────────────────────────────────────────────────────────────────
   // Pre-roll and announce the mob's next attack type. Call after pendingCombat is set.
   function prepareNextMobAttack(mob, fightLog) {
-    const atkType = Combat.rollMobAttack(mob);
+    const player = current();
+    let atkType = Combat.rollMobAttack(mob);
+    if (atkType === 'C' && player.hasEquipped('blowpipe')) {
+      // Blowpipe: immune to charisma — mob picks a different attack type
+      const fallback = ['F','D','M','V'].find(s => mob.stats[s] > 0) ?? 'F';
+      atkType = fallback;
+      fightLog.push(`${mob.name} cannot use Charisma — Blowpipe deflects it!`);
+    }
     state.pendingCombat.mobNextAttackType = atkType;
     const msg = `${mob.name} prepares a ${STAT_NAMES[atkType] ?? atkType} attack!`;
     fightLog.push(msg);
@@ -1167,6 +1300,33 @@ const Game = (() => {
     }
   }
 
+  // ── King's Hall Battle ────────────────────────────────────────────────────
+
+  function startKingBattle(player) {
+    function onVictory() {
+      const kingMob = MOBS.spawn('king');
+      const loot    = Combat.resolveLoot(player, kingMob);
+      grantLoot(player, loot);
+      state.defeatedBosses.add('king');
+      log(`${player.name} defeats the King! The hall is conquered.`);
+      emit('combat_victory', { player: player.name, mob: 'King', loot });
+      const lootDesc = buildLootDescription(loot);
+      showLootConfirm(`King defeated! Loot: ${lootDesc}`, null);
+    }
+
+    function onDefeat() {
+      log(`${player.name} is slain in the King's Hall.`);
+      player.isAlive = false;
+      emit('player_defeated', { player: player.name });
+      checkGameOver();
+      if (state.phase !== Phase.GAME_OVER) endTileInteraction();
+    }
+
+    KingBattle.init(player, onVictory, onDefeat);
+    state.phase = Phase.KING_BATTLE;
+    emit('state_change', { phase: state.phase, player: player.name });
+  }
+
   function startCombat(mob, isBoss, onCompleteCallback, minibossTier = null) {
     if (!mob) { endTileInteraction(); return; }
     const player = current();
@@ -1199,7 +1359,7 @@ const Game = (() => {
       combatParries:       0,
       combatAbilityUnits:  0,
       fightAttackTypes:    new Set(),
-      usedCharismaOptions: new Set(),
+      curseUsedThisTurn:   false,
     };
     if (!initResult.playerFirst) {
       prepareNextMobAttack(mob, initResult.log);
@@ -1232,6 +1392,7 @@ const Game = (() => {
         emit('combat_update', {
           player: player.name, mob,
           newLog: result.newLog ?? [],
+          logType: 'bard',
           outcome: 'charisma_pending',
           combatSubPhase: 'charisma_pick',
           charismaResult: result.charismaResult,
@@ -1255,7 +1416,10 @@ const Game = (() => {
       if (state.pendingCombat?.minibossTier != null && result.parried) {
         state.pendingCombat.combatParries++;
       }
-      if (result.outcome === 'ongoing') state.pendingCombat.combatSubPhase = 'player_attack';
+      if (result.outcome === 'ongoing') {
+        state.pendingCombat.combatSubPhase  = 'player_attack';
+        state.pendingCombat.curseUsedThisTurn = false;
+      }
     }
 
     if (result.coinsChanged) emit('coins_changed', { player: player.name, coins: player.coins });
@@ -1287,6 +1451,7 @@ const Game = (() => {
       log(`${player.name} defeats ${mob.name}`);
       grantLoot(player, result.loot);
       emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot });
+      if (savedCombat.isBoss) state.defeatedBosses.add(mob.id);
       if (mob.id === 'dragon') {
         state.dragonDefeated = true;
         state.pvpActive      = true;
@@ -1319,7 +1484,7 @@ const Game = (() => {
       newLog.push(`${player.name} retreats!`);
       player.clearFightEffects(); mob.statusEffects = [];
       state.pendingCombat = null;
-      emit('combat_update', { player: player.name, mob, newLog, outcome: 'escaped', combatSubPhase: null });
+      emit('combat_update', { player: player.name, mob, newLog, logType: 'bard', outcome: 'escaped', combatSubPhase: null });
       log(`${player.name} retreats from ${mob.name}`);
       endTileInteraction();
       return;
@@ -1332,11 +1497,10 @@ const Game = (() => {
       state.pendingCombat.combatAbilityUnits += (ABILITY_PTS[action.tier] ?? 0) * zw;
     }
 
-    // C XP for each unique dialogue option used in this fight (by family+tier key)
+    // C XP per charisma interaction, capped at 10 per fight (same as combat XP)
     if (action.family && action.tier) {
-      const optKey = `${action.family}:${action.tier}`;
-      if (!state.pendingCombat.usedCharismaOptions.has(optKey)) {
-        state.pendingCombat.usedCharismaOptions.add(optKey);
+      if ((player.combatXpHits ?? 0) < 10) {
+        player.combatXpHits = (player.combatXpHits ?? 0) + 1;
         player.gainXP('C', action.tier);
       }
     }
@@ -1351,7 +1515,7 @@ const Game = (() => {
       state.pendingCombat.charismaResult = null;
       const { msg } = prepareNextMobAttack(mob, fightLog);
       newLog.push(msg);
-      emit('combat_update', { player: player.name, mob, newLog, outcome: 'ongoing', combatSubPhase: 'mob_attack' });
+      emit('combat_update', { player: player.name, mob, newLog, logType: 'bard', outcome: 'ongoing', combatSubPhase: 'mob_attack' });
       return;
     }
 
@@ -1364,8 +1528,9 @@ const Game = (() => {
       }
       log(`${player.name} defeats ${mob.name}`);
       grantLoot(player, result.loot);
-      emit('combat_update', { player: player.name, mob, newLog, outcome: 'victory' });
+      emit('combat_update', { player: player.name, mob, newLog, logType: 'bard', outcome: 'victory' });
       emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot });
+      if (savedCombat.isBoss) state.defeatedBosses.add(mob.id);
       if (mob.id === 'dragon') {
         state.dragonDefeated = true;
         state.pvpActive      = true;
@@ -1380,13 +1545,13 @@ const Game = (() => {
         applyCharismaProgress(player, savedCombat);
       }
       log(`${player.name} befriends ${mob.name}`);
-      emit('combat_update', { player: player.name, mob, newLog, outcome: 'befriended' });
+      emit('combat_update', { player: player.name, mob, newLog, logType: 'bard', outcome: 'befriended' });
       endTileInteraction();
     } else if (result.outcome === 'charisma_end') {
       if (savedCombat.minibossTier != null && !savedCombat.isBoss) {
         applyCharismaProgress(player, savedCombat);
       }
-      emit('combat_update', { player: player.name, mob, newLog, outcome: 'charisma_end' });
+      emit('combat_update', { player: player.name, mob, newLog, logType: 'bard', outcome: 'charisma_end' });
       log(`${player.name} ends the encounter with ${mob.name}`);
       endTileInteraction();
     }
@@ -1434,6 +1599,7 @@ const Game = (() => {
       grantLoot(player, result.loot);
       emit('combat_update', { player: player.name, mob, newLog: result.newLog, outcome: 'victory' });
       emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot });
+      if (savedCombat.isBoss) state.defeatedBosses.add(mob.id);
       if (mob.id === 'dragon') {
         state.dragonDefeated = true;
         state.pvpActive = true;

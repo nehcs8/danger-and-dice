@@ -70,7 +70,7 @@ const Combat = (() => {
 
   function mobTickEffects(mob) {
     mob.statusEffects = (mob.statusEffects ?? [])
-      .map(e => ({ ...e, turnsLeft: e.turnsLeft - 1 }))
+      .map(e => e.skipFirstTick ? { ...e, skipFirstTick: false } : { ...e, turnsLeft: e.turnsLeft - 1 })
       .filter(e => e.turnsLeft > 0);
   }
 
@@ -89,8 +89,8 @@ const Combat = (() => {
   function resolveLoot(player, mob) {
     let coins = mob.coins ?? 0;
     if (mob.coinDice) for (let i = 0; i < mob.coinDice; i++) coins += Dice.d6();
-    if (player.hasEquipped('big_knife'))    coins += 3;
-    if (player.hasEquipped('small_pistol')) coins *= 3;
+    if (player.hasEquipped('big_knife'))    coins += 15;
+    if (player.hasEquipped('small_pistol')) coins *= 2;
     if (player.hasEnchantment('plunder'))   coins += 5;
 
     const STAT_KEYS = ['F','D','A','M','C','V'];
@@ -116,17 +116,17 @@ const Combat = (() => {
     if (player.hasEnchantment('fury')) {
       const tier = player.getEnchantmentTier('fury');
       mob.stats.A = Math.max(0, mob.stats.A - tier);
-      log.push(`Fury: ${targetName(mob)} loses ${tier}A`);
+      log.push({ text: `Fury: ${targetName(mob)} loses ${tier}A`, type: 'enchant' });
     }
     if (player.hasEnchantment('hawk_eye')) {
       const tier = player.getEnchantmentTier('hawk_eye');
       mob.stats.V = Math.max(0, mob.stats.V - tier);
-      log.push(`Hawk Eye: ${targetName(mob)} loses ${tier}V`);
+      log.push({ text: `Hawk Eye: ${targetName(mob)} loses ${tier}V`, type: 'enchant' });
     }
     if (player.hasEnchantment('flame')) {
       mob.statusEffects = mob.statusEffects ?? [];
       mob.statusEffects.push({ type:'fire', turnsLeft:1 });
-      log.push(`Flame: ${targetName(mob)} will burn next turn`);
+      log.push({ text: `Flame: ${targetName(mob)} will burn next turn`, type: 'enchant' });
     }
   }
 
@@ -194,6 +194,11 @@ const Combat = (() => {
       }
 
       case 'friendly:3': {
+        if (player.friendsList.length >= 4) {
+          log.push(`${targetName(mob)} is impressed, but your party is full (max 4 friends).`);
+          player.clearFightEffects(); mob.statusEffects = [];
+          return { outcome: 'charisma_end' };
+        }
         player.friendsList.push({
           uid: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
           id: mob.id, name: mob.name,
@@ -212,8 +217,8 @@ const Combat = (() => {
         const v2 = getMobStat(mob, stat2);
         const turns = Dice.d6();
         mob.statusEffects = mob.statusEffects ?? [];
-        mob.statusEffects.push({ type: 'malus', stat: stat1, value: v2 - v1, turnsLeft: turns });
-        mob.statusEffects.push({ type: 'malus', stat: stat2, value: v1 - v2, turnsLeft: turns });
+        mob.statusEffects.push({ type: 'malus', stat: stat1, value: v2 - v1, turnsLeft: turns, skipFirstTick: true });
+        mob.statusEffects.push({ type: 'malus', stat: stat2, value: v1 - v2, turnsLeft: turns, skipFirstTick: true });
         log.push(`${targetName(mob)}: ${stat1}↔${stat2} swapped for ${turns} turns`);
         return { outcome: 'ongoing' };
       }
@@ -222,7 +227,7 @@ const Combat = (() => {
         const amount = Dice.d6();
         const turns = Dice.d6();
         mob.statusEffects = mob.statusEffects ?? [];
-        mob.statusEffects.push({ type: 'malus', stat: action.stat, value: -amount, turnsLeft: turns });
+        mob.statusEffects.push({ type: 'malus', stat: action.stat, value: -amount, turnsLeft: turns, skipFirstTick: true });
         log.push(`${targetName(mob)} −${amount}${action.stat} for ${turns} turns`);
         return { outcome: 'ongoing' };
       }
@@ -230,7 +235,7 @@ const Combat = (() => {
       case 'mock:3': {
         const amount = Dice.d6();
         const turns = Dice.d6();
-        player.statusEffects.push({ type: 'bonus', stat: action.stat, value: amount, turnsLeft: turns });
+        player.statusEffects.push({ type: 'bonus', stat: action.stat, value: amount, turnsLeft: turns, skipFirstTick: true });
         log.push(`${player.name} +${amount}${action.stat} for ${turns} turns`);
         return { outcome: 'ongoing' };
       }
@@ -304,6 +309,14 @@ const Combat = (() => {
         return { outcome: 'charisma_end' };
       }
 
+      case 'kill:1': {
+        mob.hearts.current = 0;
+        const loot = resolveLoot(player, mob);
+        log.push(`${player.name} commands the enemy to die — instant kill!`);
+        player.clearFightEffects(); mob.statusEffects = [];
+        return { outcome: 'victory', loot };
+      }
+
       default:
         return { outcome: 'ongoing' };
     }
@@ -316,17 +329,13 @@ const Combat = (() => {
     mob.statusEffects = mob.statusEffects ?? [];
 
     if (player.hasEquipped('kryss')) {
-      const roll = Dice.d6();
-      log.push(`Kryss: ${player.name} rolls ${roll}`);
-      if (roll > 3) {
-        mob.hearts.current--;
-        log.push(`Hit! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
-        if (mob.hearts.current <= 0) {
-          const loot = resolveLoot(player, mob);
-          player.clearFightEffects();
-          log.push(`${player.name} wins!`);
-          return { outcome: 'victory', loot, log };
-        }
+      mob.hearts.current--;
+      log.push(`Kryss: ${player.name} strikes before the fight! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+      if (mob.hearts.current <= 0) {
+        const loot = resolveLoot(player, mob);
+        player.clearFightEffects();
+        log.push(`${player.name} wins!`);
+        return { outcome: 'victory', loot, log };
       }
     }
 
@@ -409,7 +418,20 @@ const Combat = (() => {
           attackRoll += spell.magicValue * (player.hasEquipped('dark_tome') ? 2 : 1);
         }
         player.consumeTempBonus(attackType);
-        if (spellId) player.removeItem(spellId);
+        if (spellId) {
+          if (player.hasEquipped('cursed_ring')) {
+            if (player.halfUsedSpells.has(spellId)) {
+              player.halfUsedSpells.delete(spellId);
+              player.removeItem(spellId);
+              newLog.push(`Cursed Ring: spell consumed (2nd use)`);
+            } else {
+              player.halfUsedSpells.add(spellId);
+              newLog.push(`Cursed Ring: spell has 1 use remaining`);
+            }
+          } else {
+            player.removeItem(spellId);
+          }
+        }
         if (spellId && spell?.magicValue) player.gainXP('M', spell.magicValue);
 
         const mobDefRoll = mobRoll(mob, DEFENSE_FOR[attackType]);
@@ -419,7 +441,7 @@ const Combat = (() => {
         if (attackRoll > mobDefRoll) {
           mob.hearts.current--;
           newLog.push(`Hit! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
-          player.gainXP(attackType, 1);
+          if ((player.combatXpHits ?? 0) < 10) { player.combatXpHits = (player.combatXpHits ?? 0) + 1; player.gainXP(attackType, 1); }
           // Pickpocket Glove: steal 2×d6 coins on successful D hit
           if (attackType === 'D' && player.hasEquipped('pickpocket_glove')) {
             const stolen = Dice.d6() + Dice.d6();
@@ -440,13 +462,25 @@ const Combat = (() => {
           }
         } else {
           newLog.push(`Miss`);
-          player.gainXP(attackType, 2);
+          if ((player.combatXpHits ?? 0) < 10) { player.combatXpHits = (player.combatXpHits ?? 0) + 1; player.gainXP(attackType, 2); }
         }
         if (coinsChanged) { fightLog.push(...newLog); return { outcome: 'ongoing', newLog, coinsChanged }; }
 
       } else if (action.type === 'bard') {
         const charismaResult = resolveCharismaRoll(player, mob, newLog);
         if (charismaResult.diff >= 1) {
+          if (player.hasEquipped('cursed_rattle')) {
+            mob.hearts.current--;
+            newLog.push(`Cursed Rattle: ${targetName(mob)} takes 1 damage! ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+            if (mob.hearts.current <= 0) {
+              if (player.hasEnchantment('bloodlust')) { player.healHeart(1); newLog.push(`Bloodlust: ${player.name} +1 ❤`); }
+              const loot = resolveLoot(player, mob);
+              newLog.push(`${player.name} wins!`);
+              player.clearFightEffects(); mob.statusEffects = [];
+              fightLog.push(...newLog);
+              return { outcome: 'victory', loot, newLog };
+            }
+          }
           fightLog.push(...newLog);
           return { outcome: 'charisma_pending', charismaResult, newLog };
         }
@@ -492,8 +526,7 @@ const Combat = (() => {
         newLog.push(`${targetName(mob)} [${atkType}]: ${mobAtkRoll} vs ${player.name} defends ${defRoll}`);
 
         if (mobAtkRoll > defRoll) {
-          player.gainXP('A', 2);
-          if (atkType === 'D') player.gainXP('V', 2);
+          if ((player.combatXpHits ?? 0) < 10) { player.combatXpHits = (player.combatXpHits ?? 0) + 1; player.gainXP('A', 2); if (atkType === 'D') player.gainXP('V', 2); }
           if (player.hasEnchantment('thorns') && Math.random() < 0.3) {
             mob.hearts.current--;
             newLog.push(`Thorns! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
@@ -515,8 +548,7 @@ const Combat = (() => {
           }
         } else {
           newLog.push(`Miss`);
-          player.gainXP('A', 1);
-          if (atkType === 'D') player.gainXP('V', 1);
+          if ((player.combatXpHits ?? 0) < 10) { player.combatXpHits = (player.combatXpHits ?? 0) + 1; player.gainXP('A', 1); if (atkType === 'D') player.gainXP('V', 1); }
           parried = true;
         }
       }
@@ -537,16 +569,12 @@ const Combat = (() => {
     mob.statusEffects = mob.statusEffects ?? [];
 
     if (player.hasEquipped('kryss')) {
-      const roll = Dice.d6();
-      log.push(`Kryss: ${player.name} rolls ${roll}`);
-      if (roll > 3) {
-        mob.hearts.current--;
-        log.push(`Kryss hits! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
-        if (mob.hearts.current <= 0) {
-          const loot = resolveLoot(player, mob);
-          log.push(`${player.name} wins!`);
-          return { outcome:'victory', loot, log };
-        }
+      mob.hearts.current--;
+      log.push(`Kryss: ${player.name} strikes before the fight! ${targetName(mob)} ❤ ${mob.hearts.current}/${mob.hearts.max}`);
+      if (mob.hearts.current <= 0) {
+        const loot = resolveLoot(player, mob);
+        log.push(`${player.name} wins!`);
+        return { outcome:'victory', loot, log };
       }
     }
 
@@ -679,5 +707,5 @@ const Combat = (() => {
   }
 
   return { resolve, initFight, takePlayerAttack, takeMobAttack, rollMobAttack: mobHighestAttack,
-           resolveCharismaRoll, applyCharismaOutcome, questDescription, resolveFriendRound };
+           resolveCharismaRoll, applyCharismaOutcome, questDescription, resolveFriendRound, resolveLoot };
 })();

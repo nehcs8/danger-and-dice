@@ -38,6 +38,7 @@
         <button class="diff-btn" data-diff="hard">Hard</button>
       </div>
       <button id="btn-start">Start Game</button>
+      <button id="btn-king-standalone">King's Hall (Solo Battle)</button>
     </div>
 
     <!-- ── Main game screen ─────────────────────────────────── -->
@@ -75,6 +76,7 @@
         <!-- Centre: map canvas -->
         <div id="map-container">
           <canvas id="map-canvas"></canvas>
+          <div id="tile-tooltip"></div>
         </div>
 
         <!-- Right panel: legend + inventory + log -->
@@ -200,6 +202,12 @@
                 </div>
               </div>
             </div>
+            <div id="curse-picker" class="hidden">
+              <div class="combat-extra-label" style="color:#c060c0">CURSE</div>
+              <div style="font-size:0.8em;color:#aaa;margin-bottom:6px">Apply −d6 to which mob stat? (4 turns)</div>
+              <div id="curse-stat-list" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:6px"></div>
+              <button id="btn-curse-cancel" style="padding:4px 10px;background:#555;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85em">Cancel</button>
+            </div>
             <div id="transmutation-picker" class="hidden">
               <div class="combat-extra-label" style="color:#c8a0ff">TRANSMUTATION</div>
               <div id="transmutation-picker-title" style="font-size:0.82em;color:#eee;margin-bottom:6px">Pick first stat</div>
@@ -302,9 +310,74 @@
         <h2>Game Over</h2>
         <div id="gameover-message"></div>
         <div id="gameover-recap"></div>
+        <div id="gameover-guild"></div>
+        <div id="gameover-save"></div>
         <button id="btn-restart">Play Again</button>
       </div>
 
+    </div>
+
+  </div>
+
+  <!-- ── King's Hall Battle overlay ── -->
+  <div id="king-battle-overlay" class="hidden">
+
+    <!-- Phase 1: Weapon assignment -->
+    <div id="king-weapon-assign" class="hidden">
+      <h2>King's Hall — Arm Your Forces</h2>
+      <p><strong>F</strong> = melee (adjacent sectors only). <strong>D / M</strong> = ranged (shoots with LoS; forced melee if adjacent). Attacks are automatic.</p>
+      <div id="king-assign-units"></div>
+      <button id="btn-king-assign-confirm" class="king-confirm-btn">Enter the Hall</button>
+    </div>
+
+    <!-- Phase 2: Battle -->
+    <div id="king-battle-main" class="hidden">
+
+      <div id="king-battle-topbar">
+        <span id="king-round-label">Round 1</span>
+        <span id="king-timer">15s</span>
+        <button id="btn-king-commit">Commit</button>
+        <button id="btn-king-fast" title="Toggle fast planning (3s timer)">⚡ Fast</button>
+        <span id="king-sector-info"></span>
+      </div>
+
+      <div id="king-battle-layout">
+
+        <div id="king-units-col">
+          <div class="king-col-header">Turn Order ↓ Speed</div>
+          <div id="king-unit-list"></div>
+        </div>
+
+        <div id="king-canvas-wrap">
+          <canvas id="king-canvas"></canvas>
+          <div id="king-legend">
+            <span class="king-leg" style="background:#ff9999">ATK+2</span>
+            <span class="king-leg" style="background:#ffd6d6">ATK+1</span>
+            <span class="king-leg" style="background:#99bbff">DEF+2</span>
+            <span class="king-leg" style="background:#cce0ff">DEF+1</span>
+            <span class="king-leg" style="background:#e8e0d0">Neutral</span>
+            <span class="king-leg" style="background:#444">Obstacle</span>
+            <span class="king-leg" style="background:#229966;color:#fff">Player</span>
+            <span class="king-leg" style="background:#bb2222;color:#fff">Enemy</span>
+          </div>
+        </div>
+
+        <div id="king-right-col">
+          <div id="king-action-hint">Click a unit to select, then click a yellow cell to queue its move.</div>
+          <div class="king-col-header">Combat Log</div>
+          <div id="king-log"></div>
+        </div>
+
+      </div>
+
+      <!-- Standalone result overlay (shown inside the battle panel) -->
+      <div id="king-standalone-result" style="display:none">
+        <div id="king-result-box">
+          <div id="king-result-text">Victory!</div>
+          <button id="btn-king-play-again">Play Again</button>
+          <button id="btn-king-back-menu">Back to Menu</button>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -329,11 +402,14 @@
   <script src="js/engine/player.js"></script>
   <script src="js/engine/movement.js"></script>
   <script src="js/engine/combat.js"></script>
+  <script src="js/engine/king_battle.js"></script>
   <script src="js/engine/game.js"></script>
   <script src="js/engine/bot.js"></script>
   <script src="js/ui/renderer.js"></script>
   <script src="js/ui/hud.js"></script>
   <script src="js/ui/panels.js"></script>
+  <script src="js/ui/king_renderer.js"></script>
+  <script src="js/ui/king_panel.js"></script>
   <script src="js/ui/spectate.js"></script>
   <script src="js/main.js"></script>
 

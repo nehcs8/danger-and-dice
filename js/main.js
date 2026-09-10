@@ -3,6 +3,24 @@
 (function () {
   const $ = id => document.getElementById(id);
 
+  // KingPanel is available immediately (standalone mode, before game start)
+  KingPanel.init();
+
+  // ── King's Hall standalone mode ──────────────────────────────────────────
+  $('btn-king-standalone').addEventListener('click', () => {
+    $('screen-setup').classList.remove('active');
+    KingPanel.startStandalone();
+  });
+  $('btn-king-play-again').addEventListener('click', () => {
+    KingBattle.clearState();
+    KingPanel.startStandalone();
+  });
+  $('btn-king-back-menu').addEventListener('click', () => {
+    KingBattle.clearState();
+    KingPanel.hide();
+    $('screen-setup').classList.add('active');
+  });
+
   // Returns the current bot action delay in ms, scaled by an optional factor.
   // In spectate mode the speed buttons control this; otherwise fixed at 600 ms.
   function botDelay(factor) {
@@ -187,13 +205,26 @@
     });
 
     // Roll button (also ends turn when stop-blocked)
-    $('btn-roll').addEventListener('click', () => {
+    function doRoll() {
       const phase = Game.getState().phase;
       if (phase === Game.Phase.ROLL_MOVE) {
         Game.submitAction({ type: 'roll' });
       } else if (phase === Game.Phase.STOP_BLOCKED) {
         Game.submitAction({ type: 'tile_confirm' });
       }
+    }
+    $('btn-roll').addEventListener('click', doRoll);
+    document.addEventListener('keydown', e => {
+      if (e.code !== 'Space') return;
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      const lootBtn = $('btn-loot-confirm');
+      if (lootBtn && !lootBtn.closest('.hidden') && lootBtn.offsetParent !== null) {
+        lootBtn.click();
+        return;
+      }
+      doRoll();
     });
 
     // Canvas click → move
@@ -202,6 +233,58 @@
       if (dest && Game.getState().phase === Game.Phase.MOVING) {
         Game.submitAction({ type: 'move', dest });
       }
+    });
+
+    // Boss tile hover tooltip
+    const tooltip = $('tile-tooltip');
+
+    function bossItemLabel(entry) {
+      if (entry.rollForStat) {
+        const qty = entry.count > 1 ? `${entry.count}× ` : '';
+        return `• ${qty}Potion +${entry.potionValue} (random stat)`;
+      }
+      const item   = getItem(entry.itemId);
+      let   name   = item?.name ?? entry.itemId;
+      // Append stat annotation for equippable items (slot-based) that don't
+      // already encode stats in their name (DROPS include them in the name).
+      if (item?.slot && item.statBonus) {
+        const stats = Object.entries(item.statBonus)
+          .map(([s, v]) => `${v}${s}`)
+          .join(' ');
+        name += ` (${stats})`;
+      }
+      const qty = entry.count > 1 ? `${entry.count}× ` : '';
+      return `• ${qty}${name}`;
+    }
+
+    $('map-canvas').addEventListener('mousemove', e => {
+      const coords = Renderer.coordsAt(e.offsetX, e.offsetY);
+      if (!coords || MapGrid.get(coords.x, coords.y) !== TileType.BOSS) {
+        tooltip.style.display = 'none';
+        return;
+      }
+      const td  = MapGrid.getTileData(coords.x, coords.y);
+      const mob = MOBS.getMob(td.bossId);
+      if (!mob) { tooltip.style.display = 'none'; return; }
+
+      const dropLines = mob.lootTable.map(bossItemLabel);
+      if (mob.id === 'dragon') {
+        dropLines.push('• Princess appears');
+        dropLines.push('• 100d6 coins');
+      } else if (mob.coinDice > 0) {
+        dropLines.push(`• ${mob.coinDice}d6 coins`);
+      }
+
+      tooltip.innerHTML =
+        `<strong>${mob.name}</strong><br>` +
+        `<span style="color:#aaa;font-size:0.85em">Drops:</span><br>` +
+        dropLines.join('<br>');
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top  = (e.clientY + 14) + 'px';
+    });
+    $('map-canvas').addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
     });
   }
 

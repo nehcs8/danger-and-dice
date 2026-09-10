@@ -246,8 +246,8 @@ body {
 
 /* ── Game-over recap ─────────────────────────────────────────────────────── */
 #modal-gameover {
-  max-width: 660px;
-  width: 660px;
+  max-width: 680px;
+  width: 680px;
 }
 
 .recap-wrap {
@@ -315,6 +315,128 @@ body {
   gap: 8px;
 }
 
+/* ── Guild mastery ───────────────────────────────────────────────────────── */
+#gameover-guild {
+  margin-top: 6px;
+}
+
+.guild-mastery-title {
+  margin-top: 4px;
+}
+
+.guild-mastery-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #111826;
+  border: 1px solid #1e2e4a;
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.guild-mastery-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+.guild-mastery-name {
+  color: #c8c0b0;
+  min-width: 80px;
+}
+
+.guild-mastery-item {
+  color: #a0c0e8;
+  flex: 1;
+}
+
+.guild-mastery-stat {
+  color: #ffd700;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Save run section ────────────────────────────────────────────────────── */
+#gameover-save {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #2a3a5a;
+}
+
+.save-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.save-label {
+  color: #8090a8;
+  font-size: 0.8rem;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.run-name-input {
+  background: #0d1520;
+  border: 1px solid #2a3a5a;
+  border-radius: 4px;
+  color: #c8d0e0;
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  flex: 1;
+}
+
+.run-name-input:focus {
+  outline: none;
+  border-color: #4a7ab0;
+}
+
+.run-comment {
+  background: #0d1520;
+  border: 1px solid #2a3a5a;
+  border-radius: 4px;
+  color: #c8d0e0;
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 6px 8px;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.run-comment:focus {
+  outline: none;
+  border-color: #4a7ab0;
+}
+
+.btn-save-run {
+  align-self: flex-start;
+  background: #1a3a6a;
+  border: 1px solid #2a5a9a;
+  border-radius: 4px;
+  color: #c8d8f8;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 6px 16px;
+}
+
+.btn-save-run:hover:not(:disabled) {
+  background: #1e4a8a;
+}
+
+.btn-save-run:disabled {
+  color: #5a9a5a;
+  border-color: #3a6a3a;
+  background: #0d1a0d;
+  cursor: default;
+}
+
 /* ── Left panel ──────────────────────────────────────────────────────────── */
 #panel-left {
   width: 180px;
@@ -369,6 +491,23 @@ body {
 }
 
 #map-canvas { cursor: pointer; image-rendering: pixelated; }
+
+#tile-tooltip {
+  display: none;
+  position: fixed;
+  background: rgba(15, 12, 28, 0.95);
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 7px 11px;
+  color: #ddd;
+  font-size: 0.8em;
+  line-height: 1.5;
+  pointer-events: none;
+  z-index: 999;
+  max-width: 220px;
+  white-space: nowrap;
+}
+#tile-tooltip strong { color: #ff8080; }
 
 /* ── Right panel ─────────────────────────────────────────────────────────── */
 #panel-right {
@@ -708,6 +847,7 @@ body {
 }
 .shop-item span:first-child { flex: 1; }
 .shop-item.too-expensive    { opacity: 0.45; }
+.shop-item.sold-out         { opacity: 0.35; text-decoration: line-through; }
 
 .shop-item button, .close-btn, #btn-open-chest, #btn-priest-roll, #btn-restart {
   padding: 4px 10px;
@@ -875,3 +1015,384 @@ body {
 ::-webkit-scrollbar       { width: 6px; }
 ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
 ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+
+/* ── King's Hall Battle ────────────────────────────────────────────────────── */
+#king-battle-overlay {
+  position: fixed;
+  inset: 0;
+  background: #0e0e1a;
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 20px;
+}
+#king-battle-overlay.hidden { display: none; }
+
+/* Weapon assignment */
+#king-weapon-assign {
+  max-width: 1100px;
+  width: 100%;
+  padding: 24px;
+  background: #1a1a2e;
+  border: 2px solid #ffd700;
+  border-radius: 8px;
+}
+#king-weapon-assign h2 { color: #ffd700; margin-bottom: 6px; }
+#king-weapon-assign p  { color: #aaa; margin-bottom: 16px; font-size: 0.85rem; }
+
+/* Vertical stacked assignment layout */
+#king-assign-units {
+  max-height: 65vh;
+  overflow-y: auto;
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+#king-assign-tables {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: max-content;
+}
+.king-assign-col {
+  width: 100%;
+}
+.king-assign-col-hdr {
+  font-weight: bold;
+  color: #ffd700;
+  font-size: 0.88rem;
+  padding: 10px 0 5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  left: 0;
+}
+.king-assign-col + .king-assign-col {
+  border-top: 2px solid #333;
+  margin-top: 8px;
+}
+.king-team-count { color: #888; font-weight: normal; font-size: 0.8rem; }
+
+/* Stats table */
+.king-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.king-stats-table thead tr {
+  border-bottom: 1px solid #333;
+}
+.king-stats-table th {
+  color: #888;
+  font-weight: normal;
+  padding: 3px 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+.king-stats-table td {
+  padding: 3px 4px;
+  vertical-align: middle;
+}
+.king-stats-table tbody tr:nth-child(even) { background: rgba(255,255,255,0.03); }
+.king-stats-table tbody tr:hover           { background: rgba(255,255,255,0.07); }
+
+.king-th-name, .king-td-name { text-align: left; min-width: 160px; }
+.king-th-stat, .king-td-stat { text-align: center; width: 26px; color: #ccc; }
+.king-td-hp   { text-align: center; width: 34px; color: #6f6; }
+.king-td-atk  { text-align: center; width: 30px; color: #f99; font-weight: bold; }
+.king-td-def  { text-align: center; width: 30px; color: #99f; font-weight: bold; }
+.king-th-atk  { text-align: center; width: 30px; color: #f99; }
+.king-th-def  { text-align: center; width: 30px; color: #99f; }
+.king-th-wpn, .king-td-wpn  { text-align: left; min-width: 100px; }
+.king-td-rm   { width: 18px; padding: 0 2px; }
+.king-td-qty  { width: 46px; padding: 0 2px; }
+.king-td-qty select { width: 44px; font-size: 0.75rem; background: #1a1a2e; color: #ffd700; border: 1px solid #444; }
+.king-td-add  { padding-top: 6px; }
+
+.king-fixed-name { color: #ffd700; }
+.king-mob-select {
+  background: #12122a;
+  color: #eee;
+  border: 1px solid #445;
+  border-radius: 3px;
+  padding: 1px 3px;
+  font-size: 0.73rem;
+  font-family: monospace;
+  width: 100%;
+  max-width: 240px;
+  cursor: pointer;
+}
+.king-mob-select:focus { outline: 1px solid #ffd700; }
+
+.king-team-counter {
+  width: 52px;
+  background: #12122a;
+  color: #ffd700;
+  border: 1px solid #556;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 0.85rem;
+  font-weight: bold;
+  text-align: center;
+  margin-left: 6px;
+}
+.king-team-counter:focus { outline: 1px solid #ffd700; }
+
+.king-auto-wpn { color: #778; font-size: 0.75rem; }
+.king-rm-placeholder { display: inline-block; width: 16px; }
+
+.king-add-unit {
+  padding: 3px 10px;
+  background: #1a3a1a;
+  color: #8d8;
+  border: 1px solid #3a6a3a;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+.king-add-unit:hover { background: #2a5a2a; border-color: #4a8a4a; }
+
+.king-remove-unit {
+  background: none;
+  border: none;
+  color: #844;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0;
+  line-height: 1;
+}
+.king-remove-unit:hover { color: #f66; }
+
+.king-wpn-label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; font-size: 0.78rem; margin-right: 4px; }
+
+.king-confirm-btn {
+  display: block;
+  margin-top: 4px;
+  padding: 10px 32px;
+  background: #ffd700;
+  color: #1a1a2e;
+  font-weight: bold;
+  font-size: 1rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.king-confirm-btn:hover { background: #ffe44d; }
+
+/* Battle layout */
+#king-battle-main { width: 100%; position: relative; }
+
+#king-battle-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #333;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+#king-battle-layout {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  justify-content: center;
+}
+
+#king-units-col {
+  width: 210px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#king-right-col {
+  width: 250px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.king-col-header {
+  font-size: 0.7rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 4px;
+  border-bottom: 1px solid #2a2a3a;
+}
+
+#king-canvas-wrap { flex-shrink: 0; }
+#king-canvas { display: block; image-rendering: pixelated; cursor: crosshair; }
+#king-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.king-leg {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  border: 1px solid rgba(0,0,0,0.3);
+}
+
+/* (sidebar replaced by king-units-col / king-right-col above) */
+#king-round-label {
+  font-size: 1rem;
+  font-weight: bold;
+  color: #ffd700;
+  flex: 1;
+}
+#king-timer {
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: #ffd700;
+  min-width: 32px;
+  text-align: right;
+}
+#btn-king-commit {
+  padding: 4px 10px;
+  background: #2a5a2a;
+  color: #8f8;
+  border: 1px solid #3a7a3a;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+#btn-king-commit:hover:not(:disabled) { background: #3a7a3a; }
+#btn-king-commit:disabled { opacity: 0.35; cursor: default; }
+#btn-king-fast {
+  padding: 4px 10px;
+  background: #2a2a3a;
+  color: #aaa;
+  border: 1px solid #444;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+#btn-king-fast:hover { background: #3a3a4a; }
+#btn-king-fast.king-fast-active { background: #5a4a00; color: #ffd700; border-color: #ffd700; }
+
+#king-action-hint {
+  background: rgba(255,255,255,0.05);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  min-height: 56px;
+  color: #ccc;
+}
+.king-cancel-move {
+  color: #f88;
+  cursor: pointer;
+  font-size: 0.75rem;
+  text-decoration: underline;
+}
+
+#king-sector-info {
+  font-size: 0.75rem;
+  color: #aaa;
+  font-style: italic;
+  margin-left: auto;
+}
+
+/* Unit list */
+#king-unit-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.king-unit-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  margin-bottom: 2px;
+  background: rgba(255,255,255,0.04);
+  font-size: 0.75rem;
+}
+.king-unit-row.king-unit-dead { opacity: 0.35; text-decoration: line-through; }
+.king-unit-team  { font-weight: bold; font-size: 0.9rem; width: 14px; text-align: center; }
+.king-unit-name  { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.king-unit-wpn   { color: #888; min-width: 24px; }
+.king-unit-hpbar { width: 40px; height: 5px; background: #333; border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+.king-unit-hpfill { height: 100%; border-radius: 2px; }
+.king-unit-hp    { min-width: 30px; text-align: right; color: #aaa; }
+
+/* Combat log */
+#king-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: #0e0e1a;
+  border: 1px solid #333;
+  border-radius: 3px;
+  padding: 6px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: #ccc;
+}
+#king-log span   { display: block; }
+.king-log-round  { color: #ffd700; font-weight: bold; }
+.king-log-death  { color: #f66; }
+.king-log-miss   { color: #666; }
+
+/* Unit with queued move */
+.king-unit-row.king-unit-hasMove { border-left: 2px solid #ffe000; }
+
+/* Standalone result overlay */
+#king-standalone-result {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#king-result-box {
+  text-align: center;
+  padding: 32px 40px;
+  background: #1a1a2e;
+  border: 2px solid #ffd700;
+  border-radius: 8px;
+}
+#king-result-text {
+  font-size: 2rem;
+  font-weight: bold;
+  margin-bottom: 20px;
+  display: block;
+}
+#btn-king-play-again,
+#btn-king-back-menu {
+  display: inline-block;
+  margin: 0 6px;
+  padding: 8px 18px;
+  border-radius: 4px;
+  border: 1px solid #555;
+  cursor: pointer;
+  font-size: 0.9rem;
+  background: #2a2a3e;
+  color: #ddd;
+}
+#btn-king-play-again:hover { background: #3a3a5e; border-color: #ffd700; color: #ffd700; }
+#btn-king-back-menu:hover  { background: #3a2a2a; border-color: #f88; color: #f88; }
+
+/* Setup screen standalone button */
+#btn-king-standalone {
+  display: block;
+  margin: 10px auto 0;
+  padding: 8px 20px;
+  background: #2a2a3e;
+  color: #aac;
+  border: 1px solid #556;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}

@@ -91,22 +91,38 @@ const HUD = (() => {
     return Array.from({length: max}, (_, i) => i < current ? full : empty).join(' ');
   }
 
+  function statCombatDelta(player, s) {
+    let delta = player.priestBuff ?? 0;
+    for (const e of player.statusEffects) {
+      if (e.stat === s) delta += e.value ?? 0;
+    }
+    delta += player.tempBonuses?.[s] ?? 0;
+    return delta;
+  }
+
   function statsHTML(player) {
     const stats = ['F','D','A','M','C','V'];
     const labels = { F:'STR', D:'DEX', A:'ARM', M:'MAG', C:'CHA', V:'SPD' };
     return `<table class="stats-table">${
       stats.map(s => {
-        const base = player.baseStats[s];
-        const eff  = player.getStat(s);
-        const diff = eff - base;
-        const diffStr = diff > 0 ? `<span class="bonus">+${diff}</span>`
-                      : diff < 0 ? `<span class="malus">${diff}</span>` : '';
+        const base    = player.baseStats[s];
+        const eff     = player.getStat(s);
+        const cDelta  = statCombatDelta(player, s);
+        const eDiff   = eff - base - cDelta;
+
+        const equipStr = eDiff > 0 ? `<span class="bonus">+${eDiff}</span>`
+                       : eDiff < 0 ? `<span class="malus">${eDiff}</span>` : '';
+        const combatStr = cDelta > 0
+          ? `<span style="color:#9eff9e;font-weight:bold"> +${cDelta}</span>`
+          : cDelta < 0
+          ? `<span style="color:#ff9e9e;font-weight:bold"> ${cDelta}</span>` : '';
+
         const xp    = player.xp?.[s] ?? 0;
         const xpMax = base * 10;
         const pct   = Math.min(100, Math.round((xp / xpMax) * 100));
         return `<tr>
           <td>${labels[s]}</td>
-          <td>${base}${diffStr}</td>
+          <td>${base}${equipStr}${combatStr}</td>
           <td style="width:54px;padding-left:4px">
             <div class="xp-bar-outer" title="${xp.toFixed(1)}/${xpMax} XP">
               <div class="xp-bar-fill" style="width:${pct}%"></div>

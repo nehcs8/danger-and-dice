@@ -187,6 +187,55 @@ const MOBS = (() => {
         0), isBoss:true },
   ];
 
+  // ── Animal variants (random-event creatures with graded skewed stats) ──────
+  {
+    const GRADES = [
+      { adj: 'Feeble', domStat:  6, otherStat: 2, hearts: 1, tier: 0 },
+      { adj: 'Weak',   domStat: 10, otherStat: 3, hearts: 2, tier: 0 },
+      { adj: 'Wild',   domStat: 14, otherStat: 4, hearts: 3, tier: 1 },
+      { adj: 'Rabid',  domStat: 19, otherStat: 5, hearts: 4, tier: 1 },
+      { adj: 'Fierce', domStat: 25, otherStat: 7, hearts: 5, tier: 2 },
+      { adj: 'Savage', domStat: 32, otherStat: 9, hearts: 6, tier: 3 },
+    ];
+    const SPECIES = [
+      { id: 'bear',    name: 'Bear',    dom: 'F'    },
+      { id: 'fox',     name: 'Fox',     dom: 'D'    },
+      { id: 'owl',     name: 'Owl',     dom: 'M'    },
+      { id: 'parrot',  name: 'Parrot',  dom: 'C'    },
+      { id: 'wolf',    name: 'Wolf',    dom: 'FD'   },
+      { id: 'serpent', name: 'Serpent', dom: 'FM'   },
+      { id: 'gorilla', name: 'Gorilla', dom: 'FC'   },
+      { id: 'hawk',    name: 'Hawk',    dom: 'DM'   },
+      { id: 'raven',   name: 'Raven',   dom: 'DC'   },
+      { id: 'peacock', name: 'Peacock', dom: 'MC'   },
+      { id: 'wyvern',  name: 'Wyvern',  dom: 'FDM'  },
+      { id: 'panther', name: 'Panther', dom: 'FDC'  },
+      { id: 'sphinx',  name: 'Sphinx',  dom: 'FMC'  },
+      { id: 'harpy',   name: 'Harpy',   dom: 'DMC'  },
+      { id: 'chimera', name: 'Chimera', dom: 'FDMC' },
+    ];
+    for (const sp of SPECIES) {
+      const dominant = new Set(sp.dom.split(''));
+      for (const g of GRADES) {
+        const stats = {};
+        for (const s of ['F','D','M','A','V','C'])
+          stats[s] = dominant.has(s) ? g.domStat : g.otherStat;
+        list.push({
+          id: `${sp.id}_${g.adj.toLowerCase()}`,
+          name: `${g.adj} ${sp.name}`,
+          tier: g.tier,
+          stats,
+          hearts: { current: g.hearts, max: g.hearts },
+          lootTable: [{ rollForStat: true, potionValue: Math.max(1, g.tier) }],
+          coins: g.tier * 15,
+          coinDice: g.tier,
+          statusEffects: [],
+          isAnimal: true,
+        });
+      }
+    }
+  }
+
   const registry = {};
   list.forEach(m => { registry[m.id] = m; });
 

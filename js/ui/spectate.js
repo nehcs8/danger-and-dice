@@ -17,12 +17,14 @@ const SpectateStats = (() => {
   let msDelay = 600;
   let players = [];
 
-  const kills       = {};   // playerId → cumulative kill count
-  const pturn       = {};   // playerId → that player's own turn count (for X axis)
-  const series      = {};   // playerId → { turns, coins, kills, statSum, maxHearts, items }
-  const milestones  = {};   // playerId → [{ turn, label }]
-  const statFlags   = {};   // playerId → { allSix, any8 }
-  const bestTier    = {};   // playerId → highest item tier equipped so far
+  const kills            = {};   // playerId → cumulative kill count
+  const pturn            = {};   // playerId → that player's own turn count (for X axis)
+  const series           = {};   // playerId → { turns, coins, kills, statSum, maxHearts, items }
+  const milestones       = {};   // playerId → [{ turn, label }]
+  const statFlags        = {};   // playerId → { allSix, any8 }
+  const bestTier         = {};   // playerId → highest item tier equipped so far
+  const guildLevelSix    = {};   // playerId → [{ turn, itemName, stat, guild }]
+  const guildLevelSixSeen = {};  // playerId → Set<stat> already flagged
 
   // ── Initialise ─────────────────────────────────────────────────────────────
   function init(playerList) {
@@ -30,12 +32,14 @@ const SpectateStats = (() => {
     players = playerList;
 
     playerList.forEach(p => {
-      kills[p.id]      = 0;
-      pturn[p.id]      = 0;
-      series[p.id]     = { turns:[], coins:[], kills:[], statSum:[], maxHearts:[], items:[] };
-      milestones[p.id] = [];
-      statFlags[p.id]  = { allSix: false, any8: false };
-      bestTier[p.id]   = 0;
+      kills[p.id]             = 0;
+      pturn[p.id]             = 0;
+      series[p.id]            = { turns:[], coins:[], kills:[], statSum:[], maxHearts:[], items:[] };
+      milestones[p.id]        = [];
+      statFlags[p.id]         = { allSix: false, any8: false };
+      bestTier[p.id]          = 0;
+      guildLevelSix[p.id]     = [];
+      guildLevelSixSeen[p.id] = new Set();
     });
 
     // Count kills and track milestones
@@ -53,7 +57,7 @@ const SpectateStats = (() => {
       }
     });
 
-    // Track best item equipped
+    // Track best item equipped + guild weapon mastery
     Game.on('item_equipped', ev => {
       const p = players.find(q => q.name === ev.player);
       if (!p) return;
@@ -62,6 +66,12 @@ const SpectateStats = (() => {
         bestTier[p.id] = tier;
         addMilestone(p.id, pturn[p.id], `Equipped ${ev.item.name} (Tier ${tier})`);
       }
+      checkGuildLevelSix(ev.player);
+    });
+
+    // Stat upgrade may push a guild weapon stat to 6
+    Game.on('skill_upgraded', ev => {
+      checkGuildLevelSix(ev.player);
     });
 
     // Snapshot each player's state at the start of their movement roll (for charts)
@@ -108,6 +118,67 @@ const SpectateStats = (() => {
         }
       }
     }
+  }
+
+  // ── Guild weapon level-6 tracking ───────────────────────────────────────────
+  function checkGuildLevelSix(playerName) {
+    const p = players.find(q => q.name === playerName);
+    if (!p) return;
+    const seen = guildLevelSixSeen[p.id];
+    if (!seen) return;
+
+    const st = Game.getState();
+    const playerObj = st.players.find(q => q.name === playerName);
+    if (!playerObj) return;
+
+    for (const slot of Object.keys(playerObj.equipped)) {
+      const item = playerObj.equipped[slot];
+      if (!item?.guild) continue;
+
+      const stat = Object.keys(item.statBonus ?? {})[0];
+      if (!stat || seen.has(stat)) continue;
+
+      if (playerObj.getStat(stat) >= 6) {
+        seen.add(stat);
+        const turn = pturn[p.id];
+        guildLevelSix[p.id].push({ turn, itemName: item.name, stat, guild: item.guild });
+        addMilestone(p.id, turn, `Guild mastery: ${item.name} — ${stat} reached 6`);
+      }
+    }
+  }
+
+  // ── Run summary (for saving) ─────────────────────────────────────────────────
+  function getRunSummary() {
+    const st = Game.getState();
+    const result = {
+      date: new Date().toISOString(),
+      totalGameTurns: st.turnNumber ?? 0,
+      players: {},
+    };
+
+    players.forEach(p => {
+      const playerObj = st.players.find(q => q.name === p.name);
+      result.players[p.name] = {
+        isBot: p.isBot ?? false,
+        totalTurns: pturn[p.id] ?? 0,
+        kills: kills[p.id] ?? 0,
+        finalStats: playerObj ? { ...playerObj.baseStats } : {},
+        milestones: (milestones[p.id] ?? []).slice(),
+        guildLevelSix: (guildLevelSix[p.id] ?? []).slice(),
+        series: series[p.id]
+          ? {
+              turns:     series[p.id].turns.slice(),
+              coins:     series[p.id].coins.slice(),
+              kills:     series[p.id].kills.slice(),
+              statSum:   series[p.id].statSum.slice(),
+              maxHearts: series[p.id].maxHearts.slice(),
+              items:     series[p.id].items.slice(),
+            }
+          : null,
+      };
+    });
+
+    return result;
   }
 
   // ── Speed control ───────────────────────────────────────────────────────────
@@ -316,5 +387,5 @@ const SpectateStats = (() => {
     return wrap;
   }
 
-  return { init, openStatsModal, closeStatsModal, setSpeed, getDelay, isActive, renderRecap };
+  return { init, openStatsModal, closeStatsModal, setSpeed, getDelay, isActive, renderRecap, getRunSummary };
 })();
