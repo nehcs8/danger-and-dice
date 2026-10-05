@@ -132,7 +132,7 @@
     });
 
     Game.on('log', data => {
-      HUD.appendLog(data.message);
+      HUD.appendLog(data.message, data.turn);
     });
 
     Game.on('player_moved',    () => Renderer.draw());

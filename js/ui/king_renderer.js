@@ -197,7 +197,7 @@ const KingRenderer = (() => {
       ctx.stroke();
 
       // Weapon indicator (small dot)
-      const dotColors = { F: '#f88', D: '#8cf', M: '#c8f' };
+      const dotColors = { F: '#f88', D: '#8cf', M: '#4f8' };
       ctx.fillStyle = dotColors[unit.weapon] ?? '#fff';
       ctx.beginPath();
       ctx.arc(cx + r * 0.55, cy - r * 0.55, 3, 0, Math.PI * 2);
@@ -251,5 +251,79 @@ const KingRenderer = (() => {
 
   function setHoverCell(cell) { hoverCell = cell; }
 
-  return { init, draw, cellAt, CELL, setHoverCell };
+  // ── Attack animations ──────────────────────────────────────────────────────
+  function animateAttacks(attacks, onDone) {
+    if (!attacks || !attacks.length) { onDone(); return; }
+
+    const PROJ_DUR  = 320; // ms for D and M projectiles
+    const SLASH_DUR = 260; // ms for F melee slash
+    const DUR = Math.max(PROJ_DUR, SLASH_DUR);
+    const start = performance.now();
+
+    function frame(now) {
+      const elapsed = now - start;
+      const tGlobal = Math.min(1, elapsed / DUR);
+
+      draw(); // base state
+
+      for (const atk of attacks) {
+        const dur = atk.isMelee ? SLASH_DUR : PROJ_DUR;
+        const t   = Math.min(1, elapsed / dur);
+        const alpha = atk.hit ? 1 : 0.5;
+
+        const fx = atk.fromX * CELL + CELL / 2;
+        const fy = atk.fromY * CELL + CELL / 2;
+        const tx = atk.toX  * CELL + CELL / 2;
+        const ty = atk.toY  * CELL + CELL / 2;
+
+        if (atk.isMelee) {
+          // F — slash: two diagonal lines at target, fade in then out
+          const fade = t < 0.4 ? t / 0.4 : 1 - (t - 0.4) / 0.6;
+          ctx.save();
+          ctx.globalAlpha = fade * alpha;
+          ctx.strokeStyle = '#ff6030';
+          ctx.lineWidth   = 2.5;
+          const sz = CELL * 0.45;
+          ctx.beginPath(); ctx.moveTo(tx - sz, ty - sz); ctx.lineTo(tx + sz, ty + sz); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(tx + sz, ty - sz); ctx.lineTo(tx - sz, ty + sz); ctx.stroke();
+          ctx.restore();
+        } else if (atk.weapon === 'D') {
+          // D — blue projectile dot moving toward target (stops at 75% on miss)
+          const travel = atk.hit ? t : Math.min(t, 0.75) * (1 / 0.75) * 0.75;
+          const px = fx + (tx - fx) * travel;
+          const py = fy + (ty - fy) * travel;
+          const fade = t > 0.8 ? 1 - (t - 0.8) / 0.2 : 1;
+          ctx.save();
+          ctx.globalAlpha = fade * alpha;
+          ctx.fillStyle   = '#8cf';
+          ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+        } else {
+          // M — green glowing projectile, full range regardless of distance
+          const travel = atk.hit ? t : Math.min(t, 0.75) * (1 / 0.75) * 0.75;
+          const px = fx + (tx - fx) * travel;
+          const py = fy + (ty - fy) * travel;
+          const fade = t > 0.8 ? 1 - (t - 0.8) / 0.2 : 1;
+          ctx.save();
+          ctx.globalAlpha = fade * alpha;
+          ctx.shadowColor = '#4f8';
+          ctx.shadowBlur  = 8;
+          ctx.fillStyle   = '#4f8';
+          ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      if (tGlobal < 1) {
+        requestAnimationFrame(frame);
+      } else {
+        draw();
+        onDone();
+      }
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  return { init, draw, cellAt, CELL, setHoverCell, animateAttacks };
 })();

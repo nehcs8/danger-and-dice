@@ -9,22 +9,51 @@ const SpectateStats = (() => {
     { key: 'kills',     label: 'Kills (cumulative)' },
     { key: 'statSum',   label: 'Total Stats  (F+D+A+M+C+V)' },
     { key: 'items',     label: 'Items Held (inventory + equipped)' },
+    { key: 'wealth',    label: 'Wealth Generated (coins + loot value)' },
+    { key: 'hp',        label: 'HP (hearts at turn start)' },
   ];
 
-  const STAT_KEYS = ['F','D','A','M','C','V'];
+  // Consumable categories — order determines pie-chart segment order
+  const CONSUMABLE_CATS = [
+    { key: 'stat_F',        label: 'Stat F',          color: '#ff6b6b' },
+    { key: 'stat_D',        label: 'Stat D',          color: '#ffcb6b' },
+    { key: 'stat_A',        label: 'Stat A',          color: '#aaaaaa' },
+    { key: 'stat_M',        label: 'Stat M',          color: '#6bcbff' },
+    { key: 'stat_C',        label: 'Stat C',          color: '#c87bff' },
+    { key: 'stat_V',        label: 'Stat V',          color: '#6bff6b' },
+    { key: 'heal',          label: 'Healing',         color: '#ff88aa' },
+    { key: 'blessing',      label: 'Holy Blessing',   color: '#ffe066' },
+    { key: 'alcohol',       label: 'Alcohol',         color: '#c8853a' },
+    { key: 'blood',         label: 'Bloods / Drops',  color: '#8b1a1a' },
+    { key: 'invisibility',  label: 'Invisibility',    color: '#d0c0ff' },
+    { key: 'attack_spell',  label: 'Attack Spells',   color: '#ff9944' },
+    { key: 'defense_spell', label: 'Defense Spells',  color: '#44aaff' },
+    { key: 'utility_spell', label: 'Utility Spells',  color: '#44ddcc' },
+    { key: 'object',        label: 'Objects',         color: '#88aa44' },
+  ];
+
+  const STAT_KEYS  = ['F','D','A','M','C','V'];
+  const SKILL_KEYS = ['F','D','A','M','C','V'];
+  const ZONE_KEYS  = [0, 1, 2, 3];
 
   let active  = false;
   let msDelay = 600;
   let players = [];
 
-  const kills            = {};   // playerId → cumulative kill count
-  const pturn            = {};   // playerId → that player's own turn count (for X axis)
-  const series           = {};   // playerId → { turns, coins, kills, statSum, maxHearts, items }
-  const milestones       = {};   // playerId → [{ turn, label }]
-  const statFlags        = {};   // playerId → { allSix, any8 }
-  const bestTier         = {};   // playerId → highest item tier equipped so far
-  const guildLevelSix    = {};   // playerId → [{ turn, itemName, stat, guild }]
-  const guildLevelSixSeen = {};  // playerId → Set<stat> already flagged
+  const kills             = {};   // playerId → cumulative kill count
+  const pturn             = {};   // playerId → that player's own turn count (for X axis)
+  const series            = {};   // playerId → { turns, coins, kills, statSum, hp, items, wealth }
+  const milestones        = {};   // playerId → [{ turn, label }]
+  const statFlags         = {};   // playerId → { allSix, any8 }
+  const bestTier          = {};   // playerId → highest item tier equipped so far
+  const guildLevelSix     = {};   // playerId → [{ turn, itemName, stat, guild }]
+  const guildLevelSixSeen = {};   // playerId → Set<stat> already flagged
+  const chestsOpened      = {};   // playerId → { total, empty }
+  const wealthGen         = {};   // playerId → cumulative wealth (coins + sell value of loot)
+  const killsByZone       = {};   // playerId → { 0, 1, 2, 3 }
+  const lootByZone        = {};   // playerId → { 0, 1, 2, 3 }
+  const skillUsage        = {};   // playerId → { F, D, A, M, C, V }
+  const consumableUsage   = {};   // playerId → { itemId: count }
 
   // ── Initialise ─────────────────────────────────────────────────────────────
   function init(playerList) {
@@ -34,15 +63,21 @@ const SpectateStats = (() => {
     playerList.forEach(p => {
       kills[p.id]             = 0;
       pturn[p.id]             = 0;
-      series[p.id]            = { turns:[], coins:[], kills:[], statSum:[], maxHearts:[], items:[] };
+      series[p.id]            = { turns:[], coins:[], kills:[], statSum:[], hp:[], items:[], wealth:[] };
       milestones[p.id]        = [];
       statFlags[p.id]         = { allSix: false, any8: false };
       bestTier[p.id]          = 0;
       guildLevelSix[p.id]     = [];
       guildLevelSixSeen[p.id] = new Set();
+      chestsOpened[p.id]      = { total: 0, empty: 0 };
+      wealthGen[p.id]         = 0;
+      killsByZone[p.id]       = { 0: 0, 1: 0, 2: 0, 3: 0 };
+      lootByZone[p.id]        = { 0: 0, 1: 0, 2: 0, 3: 0 };
+      skillUsage[p.id]        = { F: 0, D: 0, A: 0, M: 0, C: 0, V: 0 };
+      consumableUsage[p.id]   = {};
     });
 
-    // Count kills and track milestones
+    // Count kills, loot, wealth by zone + milestones
     Game.on('combat_victory', ev => {
       const p = players.find(q => q.name === ev.player);
       if (!p) return;
@@ -55,6 +90,14 @@ const SpectateStats = (() => {
       } else if (players.some(q => q.name === ev.mob)) {
         addMilestone(p.id, turn, `Eliminated ${ev.mob}`);
       }
+      // Zone tracking (use mapZone for animals, mobTier otherwise)
+      const zone = (ev.isAnimal ? (ev.mapZone ?? 0) : (ev.mobTier ?? 0));
+      const zk = zone in killsByZone[p.id] ? zone : 0;
+      killsByZone[p.id][zk]++;
+      const lootVal = (ev.loot?.coins ?? 0) +
+        (ev.loot?.items ?? []).reduce((s, id) => s + (sellPrice(getItem(id)) ?? 0), 0);
+      lootByZone[p.id][zk] = (lootByZone[p.id][zk] ?? 0) + lootVal;
+      wealthGen[p.id] += lootVal;
     });
 
     // Track best item equipped + guild weapon mastery
@@ -69,8 +112,40 @@ const SpectateStats = (() => {
       checkGuildLevelSix(ev.player);
     });
 
+    // Chest tracking + wealth
+    Game.on('chest_opened', ev => {
+      const p = players.find(q => q.name === ev.player);
+      if (!p) return;
+      chestsOpened[p.id].total++;
+      if (ev.isEmpty) chestsOpened[p.id].empty++;
+      const w = (ev.coins ?? 0) + (ev.itemId ? (sellPrice(getItem(ev.itemId)) ?? 0) : 0);
+      wealthGen[p.id] += w;
+    });
+
+    // Skill usage (attack and defense rolls in combat)
+    Game.on('combat_update', ev => {
+      if (!ev.skillUsed) return;
+      const p = players.find(q => q.name === ev.player);
+      if (!p || !skillUsage[p.id]) return;
+      if (ev.skillUsed in skillUsage[p.id]) skillUsage[p.id][ev.skillUsed]++;
+    });
+
+    // Consumable usage
+    Game.on('item_used', ev => {
+      const p = players.find(q => q.name === ev.player);
+      if (!p || !ev.item?.id) return;
+      if (getConsumableCategory(ev.item) === null) return;
+      const cu = consumableUsage[p.id];
+      cu[ev.item.id] = (cu[ev.item.id] ?? 0) + 1;
+    });
+
     // Stat upgrade may push a guild weapon stat to 6
     Game.on('skill_upgraded', ev => {
+      checkGuildLevelSix(ev.player);
+    });
+
+    // Guild item level-up happens on combat victory
+    Game.on('combat_victory', ev => {
       checkGuildLevelSix(ev.player);
     });
 
@@ -97,11 +172,12 @@ const SpectateStats = (() => {
     s.coins.push(player.coins);
     s.kills.push(kills[player.id]);
     s.statSum.push(STAT_KEYS.reduce((sum, k) => sum + (bs[k] ?? 0), 0));
-    s.maxHearts.push(player.hearts.max);
+    s.hp.push(player.hearts.current);
     s.items.push(
       player.inventory.length +
       Object.values(player.equipped).filter(Boolean).length
     );
+    s.wealth.push(wealthGen[player.id] ?? 0);
 
     // Stat milestones
     const sf = statFlags[player.id];
@@ -136,13 +212,14 @@ const SpectateStats = (() => {
       if (!item?.guild) continue;
 
       const stat = Object.keys(item.statBonus ?? {})[0];
-      if (!stat || seen.has(stat)) continue;
+      if (!stat || seen.has(item.id)) continue;
 
-      if (playerObj.getStat(stat) >= 6) {
-        seen.add(stat);
+      const lvlData = playerObj.guildItemLevels[item.id];
+      if ((lvlData?.itemLevel ?? 1) >= 6) {
+        seen.add(item.id);
         const turn = pturn[p.id];
         guildLevelSix[p.id].push({ turn, itemName: item.name, stat, guild: item.guild });
-        addMilestone(p.id, turn, `Guild mastery: ${item.name} — ${stat} reached 6`);
+        addMilestone(p.id, turn, `Guild mastery: ${item.name} — reached Lv.6`);
       }
     }
   }
@@ -162,17 +239,24 @@ const SpectateStats = (() => {
         isBot: p.isBot ?? false,
         totalTurns: pturn[p.id] ?? 0,
         kills: kills[p.id] ?? 0,
+        killsByZone: { ...(killsByZone[p.id] ?? {}) },
+        lootByZone: { ...(lootByZone[p.id] ?? {}) },
+        chestsOpened: { ...(chestsOpened[p.id] ?? { total: 0, empty: 0 }) },
+        totalWealth: wealthGen[p.id] ?? 0,
+        skillUsage: { ...(skillUsage[p.id] ?? {}) },
+        consumableUsage: { ...(consumableUsage[p.id] ?? {}) },
         finalStats: playerObj ? { ...playerObj.baseStats } : {},
         milestones: (milestones[p.id] ?? []).slice(),
         guildLevelSix: (guildLevelSix[p.id] ?? []).slice(),
         series: series[p.id]
           ? {
-              turns:     series[p.id].turns.slice(),
-              coins:     series[p.id].coins.slice(),
-              kills:     series[p.id].kills.slice(),
-              statSum:   series[p.id].statSum.slice(),
-              maxHearts: series[p.id].maxHearts.slice(),
-              items:     series[p.id].items.slice(),
+              turns:   series[p.id].turns.slice(),
+              coins:   series[p.id].coins.slice(),
+              kills:   series[p.id].kills.slice(),
+              statSum: series[p.id].statSum.slice(),
+              hp:      series[p.id].hp.slice(),
+              items:   series[p.id].items.slice(),
+              wealth:  series[p.id].wealth.slice(),
             }
           : null,
       };
@@ -229,6 +313,25 @@ const SpectateStats = (() => {
       players.map((p, i) =>
         `<span class="spectate-legend-item" style="color:${COLORS[i % COLORS.length]}">■ ${p.name}</span>`
       ).join('');
+
+    // Consumable pie charts — one per player in a horizontal row
+    const pieTitle = document.createElement('div');
+    pieTitle.className = 'spectate-chart-title';
+    pieTitle.textContent = 'Consumables Used';
+    container.appendChild(pieTitle);
+
+    const pieRow = document.createElement('div');
+    pieRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;';
+    players.forEach((p, i) => {
+      const pieH   = 200 + Math.ceil(CONSUMABLE_CATS.filter(c =>
+        (aggregateConsumables(p.id)[c.key] ?? 0) > 0).length / 2) * 13;
+      const canvas = document.createElement('canvas');
+      canvas.width  = 240;
+      canvas.height = Math.max(220, pieH);
+      pieRow.appendChild(canvas);
+      drawPieChart(canvas, p.id, p.name, COLORS[i % COLORS.length]);
+    });
+    container.appendChild(pieRow);
   }
 
   function drawChart(canvas, key) {
@@ -310,6 +413,131 @@ const SpectateStats = (() => {
     });
   }
 
+  // ── Consumable categorisation ────────────────────────────────────────────────
+  function getConsumableCategory(item) {
+    if (!item?.id) return null;
+    const id = item.id;
+    const statM = id.match(/^pot_([FDAMCV])\d+$/);
+    if (statM) return 'stat_' + statM[1];
+    if (id === 'pot_heal')                            return 'heal';
+    if (id === 'pot_invis' || id === 'sp_invisibility') return 'invisibility';
+    if (id.startsWith('priest_pot_'))                 return 'blessing';
+    if (id.startsWith('alcohol_'))                    return 'alcohol';
+    if (['werewolf_blood','dragon_blood','vampire_blood','dragon_scales',
+         'witch_powder','meat','fur','fairy_dust','harpy_feathers',
+         'ivory','troll_tooth'].includes(id))          return 'blood';
+    if (['bang','fireball','flare','blaze','blizzard','freeze','discharge',
+         'lightning','bolt','explosion','bomb','destruction','slash',
+         'laceration','rend'].includes(id))            return 'attack_spell';
+    if (id.startsWith('protection_'))                 return 'defense_spell';
+    if (['sp_smoke','sp_transmutation','sp_teleport',
+         'sp_curse','sp_disenchant'].includes(id))     return 'utility_spell';
+    if (['rope','map','trap','key'].includes(id))      return 'object';
+    return null;
+  }
+
+  // Returns { catKey → total } aggregated from consumableUsage[playerId]
+  function aggregateConsumables(playerId) {
+    const cu = consumableUsage[playerId] ?? {};
+    const totals = {};
+    for (const [id, count] of Object.entries(cu)) {
+      const cat = getConsumableCategory(getItem(id));
+      if (!cat) continue;
+      totals[cat] = (totals[cat] ?? 0) + count;
+    }
+    return totals;
+  }
+
+  // Formats the per-item detail for a player as grouped text lines.
+  // Returns an array of strings, one per non-empty category.
+  function consumableDetailLines(playerId) {
+    const cu = consumableUsage[playerId] ?? {};
+    // Group by category
+    const grouped = {};
+    for (const [id, count] of Object.entries(cu)) {
+      const cat = getConsumableCategory(getItem(id));
+      if (!cat) continue;
+      (grouped[cat] = grouped[cat] ?? []).push({ id, count });
+    }
+    return CONSUMABLE_CATS
+      .filter(c => grouped[c.key]?.length)
+      .map(c => {
+        const parts = grouped[c.key]
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .map(({ id, count }) => `${getItem(id)?.name ?? id}×${count}`)
+          .join(', ');
+        return `${c.label}: ${parts}`;
+      });
+  }
+
+  function drawPieChart(canvas, playerId, playerName, playerColor) {
+    const totals = aggregateConsumables(playerId);
+    const cats   = CONSUMABLE_CATS.filter(c => (totals[c.key] ?? 0) > 0);
+    const total  = cats.reduce((s, c) => s + totals[c.key], 0);
+
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#080d14';
+    ctx.fillRect(0, 0, W, H);
+
+    // Title
+    ctx.font      = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = playerColor ?? '#cccccc';
+    ctx.fillText(playerName ?? '', W / 2, 14);
+
+    if (total === 0) {
+      ctx.fillStyle = '#4a5570';
+      ctx.fillText('No consumables used', W / 2, H / 2 + 20);
+      return;
+    }
+
+    const cx = W / 2, cy = 110, r = 80;
+    let angle = -Math.PI / 2;
+
+    cats.forEach(c => {
+      const slice = (totals[c.key] / total) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, angle, angle + slice);
+      ctx.closePath();
+      ctx.fillStyle = c.color;
+      ctx.fill();
+      ctx.strokeStyle = '#080d14';
+      ctx.lineWidth   = 1.5;
+      ctx.stroke();
+      angle += slice;
+    });
+
+    // Centre hole (donut)
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.38, 0, Math.PI * 2);
+    ctx.fillStyle = '#080d14';
+    ctx.fill();
+
+    // Total label in hole
+    ctx.font      = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#8899aa';
+    ctx.fillText(`${total}`, cx, cy + 4);
+
+    // Legend (2 columns)
+    const legY0 = cy + r + 10;
+    const colW  = W / 2;
+    ctx.font      = '9px monospace';
+    ctx.textAlign = 'left';
+    cats.forEach((c, i) => {
+      const col = i % 2, row = Math.floor(i / 2);
+      const lx  = 8 + col * colW;
+      const ly  = legY0 + row * 13;
+      ctx.fillStyle = c.color;
+      ctx.fillRect(lx, ly - 7, 8, 8);
+      ctx.fillStyle = '#8899aa';
+      ctx.fillText(`${c.label} (${totals[c.key]})`, lx + 11, ly);
+    });
+  }
+
   // ── Game-over recap ─────────────────────────────────────────────────────────
   function renderRecap(winnerName) {
     const wrap = document.createElement('div');
@@ -351,6 +579,89 @@ const SpectateStats = (() => {
       }
       wrap.appendChild(msSection);
     }
+
+    // ── Per-player stats table ─────────────────────────────────────────────
+    const statsSection = document.createElement('div');
+    statsSection.className = 'recap-stats-section';
+
+    const statsTitle = document.createElement('div');
+    statsTitle.className = 'recap-section-title';
+    statsTitle.textContent = 'End-Game Stats';
+    statsSection.appendChild(statsTitle);
+
+    players.forEach((p, i) => {
+      const pid = p.id;
+      const color = COLORS[i % COLORS.length];
+      const block = document.createElement('div');
+      block.className = 'recap-player-stats';
+
+      const header = document.createElement('div');
+      header.className = 'recap-player-header';
+      header.style.color = color;
+      header.textContent = p.name;
+      block.appendChild(header);
+
+      // Chests
+      const ch = chestsOpened[pid] ?? { total: 0, empty: 0 };
+      const chestLine = document.createElement('div');
+      chestLine.className = 'recap-stat-line';
+      chestLine.textContent = `Chests: ${ch.total} opened, ${ch.empty} empty`;
+      block.appendChild(chestLine);
+
+      // Total wealth
+      const wLine = document.createElement('div');
+      wLine.className = 'recap-stat-line';
+      wLine.textContent = `Wealth generated: ${wealthGen[pid] ?? 0} g`;
+      block.appendChild(wLine);
+
+      // Kills by zone
+      const kz = killsByZone[pid] ?? {};
+      const lz = lootByZone[pid] ?? {};
+      const zoneDiv = document.createElement('div');
+      zoneDiv.className = 'recap-stat-line';
+      const zoneParts = ZONE_KEYS.map(z => `T${z}: ${kz[z] ?? 0} kills (${lz[z] ?? 0}g loot)`);
+      zoneDiv.textContent = 'By zone — ' + zoneParts.join(' | ');
+      block.appendChild(zoneDiv);
+
+      // Skill usage
+      const su = skillUsage[pid] ?? {};
+      const skillDiv = document.createElement('div');
+      skillDiv.className = 'recap-stat-line';
+      const skillParts = SKILL_KEYS.map(k => `${k}:${su[k] ?? 0}`);
+      skillDiv.textContent = 'Skill rolls — ' + skillParts.join(' ');
+      block.appendChild(skillDiv);
+
+      // Consumable usage detail + pie chart
+      const cuLines = consumableDetailLines(pid);
+      if (cuLines.length) {
+        const cuTitle = document.createElement('div');
+        cuTitle.className = 'recap-stat-line';
+        cuTitle.style.fontWeight = 'bold';
+        cuTitle.style.marginTop  = '4px';
+        cuTitle.textContent = 'Consumables used:';
+        block.appendChild(cuTitle);
+        cuLines.forEach(line => {
+          const d = document.createElement('div');
+          d.className   = 'recap-stat-line';
+          d.style.paddingLeft = '8px';
+          d.textContent = line;
+          block.appendChild(d);
+        });
+      }
+
+      const pieH   = 200 + Math.ceil(CONSUMABLE_CATS.filter(c =>
+        (aggregateConsumables(pid)[c.key] ?? 0) > 0).length / 2) * 13;
+      const pieCanvas = document.createElement('canvas');
+      pieCanvas.width  = 240;
+      pieCanvas.height = Math.max(220, pieH);
+      pieCanvas.style.display = 'block';
+      pieCanvas.style.marginTop = '6px';
+      block.appendChild(pieCanvas);
+      drawPieChart(pieCanvas, pid, p.name, color);
+
+      statsSection.appendChild(block);
+    });
+    wrap.appendChild(statsSection);
 
     // ── Charts ────────────────────────────────────────────────────────────
     const chartsSection = document.createElement('div');

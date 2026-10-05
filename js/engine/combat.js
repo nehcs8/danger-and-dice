@@ -205,6 +205,8 @@ const Combat = (() => {
           hearts: { current: mob.hearts.current, max: mob.hearts.max },
           stats: { ...mob.stats }, lootTable: mob.lootTable ?? [],
           statusEffects: [],
+          isAnimal: mob.isAnimal ?? false,
+          evolutionKills: 0,
         });
         log.push(`${targetName(mob)} joins your friends list!`);
         player.clearFightEffects(); mob.statusEffects = [];

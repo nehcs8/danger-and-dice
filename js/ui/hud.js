@@ -1,8 +1,9 @@
 // HUD — updates the left panel (stats, hearts, coins) and the log.
 
 const HUD = (() => {
-  const MAX_LOG = 80;
+  const MAX_LOG = 2000;
   const logEntries = [];
+  let _lastTurnSeen = 0;
 
   function stackItems(ids) {
     const counts = new Map();
@@ -24,6 +25,9 @@ const HUD = (() => {
 
   function init() {
     logEntries.length = 0;
+    _lastTurnSeen = 0;
+    const list = document.getElementById('log-list');
+    if (list) list.innerHTML = '';
     buildLegend();
     update({});
   }
@@ -348,15 +352,27 @@ const HUD = (() => {
     return labels[phase] ?? '';
   }
 
-  function appendLog(message) {
+  function appendLog(message, turn) {
     logEntries.push(message);
     if (logEntries.length > MAX_LOG) logEntries.shift();
     const list = _el('log-list');
-    const div  = document.createElement('div');
+
+    const div = document.createElement('div');
     div.className   = 'log-entry';
     div.textContent = message;
-    list.appendChild(div);
-    list.scrollTop  = list.scrollHeight;
+    list.insertBefore(div, list.firstChild);
+
+    // Insert a turn milestone marker every 10 turns (below the new entry)
+    if (turn != null && turn > 0) {
+      const milestone = Math.floor(turn / 10) * 10;
+      if (milestone > 0 && Math.floor(turn / 10) > Math.floor(_lastTurnSeen / 10)) {
+        _lastTurnSeen = turn;
+        const marker = document.createElement('div');
+        marker.className = 'log-turn-marker';
+        marker.textContent = `── Turn ${milestone} ──`;
+        list.insertBefore(marker, div.nextSibling);
+      }
+    }
   }
 
   function _el(id) { return document.getElementById(id); }

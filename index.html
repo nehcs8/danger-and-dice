@@ -276,6 +276,23 @@
         <button id="btn-loot-confirm">Continue</button>
       </div>
 
+      <!-- Invisibility Cloak choice on MINIBOSS tile -->
+      <div id="modal-cloak-choice" class="modal hidden">
+        <h2>Invisibility Cloak</h2>
+        <p style="color:#aaa;font-size:0.85em;margin:4px 0 10px">You spot <strong id="cloak-mob-name"></strong>. Engage or slip past?</p>
+        <div style="display:flex;gap:10px;justify-content:center">
+          <button id="btn-cloak-fight">⚔ Fight</button>
+          <button id="btn-cloak-sneak">👁 Sneak Past</button>
+        </div>
+      </div>
+
+      <!-- Heal target picker -->
+      <div id="modal-heal-target" class="modal hidden">
+        <h2>Use Healing Potion</h2>
+        <p style="color:#aaa;font-size:0.85em;margin:4px 0 10px">Who should be healed?</p>
+        <div id="heal-target-list"></div>
+      </div>
+
       <!-- XP progress modal -->
       <div id="modal-xp" class="modal hidden">
         <h2>XP Progress</h2>
@@ -374,6 +391,7 @@
       <div id="king-standalone-result" style="display:none">
         <div id="king-result-box">
           <div id="king-result-text">Victory!</div>
+          <div id="king-battle-stats"></div>
           <button id="btn-king-play-again">Play Again</button>
           <button id="btn-king-back-menu">Back to Menu</button>
         </div>
@@ -402,6 +420,12 @@
   <script src="js/engine/player.js"></script>
   <script src="js/engine/movement.js"></script>
   <script src="js/engine/combat.js"></script>
+  <script src="js/data/weights/combat_weights.js"></script>
+  <script src="js/data/weights/estimator_weights.js"></script>
+  <script src="js/engine/rl_combat.js"></script>
+  <script src="js/engine/combat_estimator.js"></script>
+  <script src="js/data/weights/nn_combat_weights.js"></script>
+  <script src="js/engine/combat_nn.js"></script>
   <script src="js/engine/king_battle.js"></script>
   <script src="js/engine/game.js"></script>
   <script src="js/engine/bot.js"></script>

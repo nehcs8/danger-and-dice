@@ -156,7 +156,7 @@ const SPECIAL_EQUIPMENT = [
   { id:'crowbar',           name:'Crowbar',           slot:'strength',  statBonus:{F:1}, effect:'sell_75pct',           guild:'thief',    buyPrice:75  },
   { id:'lucky_glove',       name:'Lucky Glove',       slot:'armor',     statBonus:{A:1}, effect:'double_chest',         guild:'thief',    buyPrice:80  },
   { id:'bottomless_bag',    name:'Bottomless Bag',    slot:'magic',     statBonus:{M:1}, effect:'all_drops',            guild:'thief',    buyPrice:100 },
-  { id:'magic_flute_thief', name:'Magic Flute',       slot:'charisma',  statBonus:{C:1}, effect:'bard_lv8_free',        guild:'thief',    buyPrice:50  },
+  { id:'magic_flute_thief', name:'Magic Flute',       slot:'charisma',  statBonus:{C:1}, effect:'c_cap_8',              guild:'thief',    buyPrice:50  },
   { id:'con_artist_hat',    name:"Con Artist's Hat",  slot:'charisma',  statBonus:{C:1}, effect:'deceive_double_coins', guild:'thief',    buyPrice:75  },
   { id:'small_pistol',      name:'Small Pistol',      slot:'dexterity', statBonus:{D:1}, effect:'coins_times2',         guild:'thief',    buyPrice:50  },
   { id:'pickpocket_glove',  name:'Pickpocket Glove',  slot:'dexterity', statBonus:{D:1}, effect:'pickpocket',           guild:'thief',    buyPrice:75  },

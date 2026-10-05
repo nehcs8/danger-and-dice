@@ -1,6 +1,8 @@
 // King Panel — UI controller for the King's Hall tactical battle.
 
 const KingPanel = (() => {
+  let _showAnimals = true;
+
   let overlay, weaponDiv, battleDiv,
       assignList, btnConfirm,
       roundLabel, timerEl, unitList, logEl, sectorInfoEl,
@@ -49,6 +51,11 @@ const KingPanel = (() => {
 
     // Weapon-assign delegated events (bound once; work across re-renders)
     assignList.addEventListener('change', e => {
+      if (e.target.id === 'king-show-animals') {
+        _showAnimals = e.target.checked;
+        renderWeaponAssign();
+        return;
+      }
       if (e.target.type === 'radio' && e.target.name.startsWith('wpn_') && e.target.checked) {
         KingBattle.setWeapon(e.target.name.slice(4), e.target.value);
       } else if (e.target.classList.contains('king-mob-select')) {
@@ -155,14 +162,16 @@ const KingPanel = (() => {
             return `<option value="${m.id}"${m.id === selectedId ? ' selected' : ''}>${m.name}  F${s.F} D${s.D} M${s.M} A${s.A} V${s.V} C${s.C}</option>`;
           }).join('') + `</optgroup>`;
       }
-      for (const sp of ANIMAL_SPECIES) {
-        const variants = MOBS.list.filter(m => m.isAnimal && m.id.startsWith(sp.id + '_'));
-        if (!variants.length) continue;
-        html += `<optgroup label="── ${sp.name} ──">` +
-          variants.map(m => {
-            const s = m.stats;
-            return `<option value="${m.id}"${m.id === selectedId ? ' selected' : ''}>${m.name}  F${s.F} D${s.D} M${s.M} A${s.A} V${s.V} C${s.C}</option>`;
-          }).join('') + `</optgroup>`;
+      if (_showAnimals) {
+        for (const sp of ANIMAL_SPECIES) {
+          const variants = MOBS.list.filter(m => m.isAnimal && m.id.startsWith(sp.id + '_'));
+          if (!variants.length) continue;
+          html += `<optgroup label="── ${sp.name} ──">` +
+            variants.map(m => {
+              const s = m.stats;
+              return `<option value="${m.id}"${m.id === selectedId ? ' selected' : ''}>${m.name}  F${s.F} D${s.D} M${s.M} A${s.A} V${s.V} C${s.C}</option>`;
+            }).join('') + `</optgroup>`;
+        }
       }
       return html;
     }
@@ -293,6 +302,9 @@ const KingPanel = (() => {
       : '';
 
     assignList.innerHTML = `
+      ${editable ? `<div class="king-assign-options">
+        <label><input type="checkbox" id="king-show-animals"${_showAnimals ? ' checked' : ''}> Include animals in dropdown</label>
+      </div>` : ''}
       <div id="king-assign-tables">
         <div class="king-assign-col">
           <div class="king-assign-col-hdr">
@@ -417,7 +429,6 @@ const KingPanel = (() => {
   function renderLog(bs) {
     const newLines = bs.log.slice(_logRenderedCount);
     if (!newLines.length) return;
-    const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 4;
     const html = newLines.map(l => {
       if (l.startsWith('──')) return `<span class="king-log-round">${l}</span>`;
       if (l.includes('falls'))  return `<span class="king-log-death">${l}</span>`;
@@ -425,9 +436,8 @@ const KingPanel = (() => {
       if (l.includes('blocked')) return `<span class="king-log-miss">${l}</span>`;
       return `<span>${l}</span>`;
     }).join('');
-    logEl.insertAdjacentHTML('beforeend', html);
+    logEl.insertAdjacentHTML('afterbegin', html);
     _logRenderedCount = bs.log.length;
-    if (atBottom) logEl.scrollTop = logEl.scrollHeight;
   }
 
   // ── Planning timer ────────────────────────────────────────────────────────
@@ -459,14 +469,16 @@ const KingPanel = (() => {
     if (!bs || bs.phase !== 'planning') return;
 
     KingBattle.executeRound();
-    KingRenderer.draw();
-    updateBattleUI();
+    const attacks = KingBattle.getLastRoundAttacks();
+    KingRenderer.animateAttacks(attacks, () => {
+      KingRenderer.draw();
+      updateBattleUI();
 
-    if (bs.phase === 'victory') { onVictory(); return; }
-    if (bs.phase === 'defeat')  { onDefeat();  return; }
+      if (bs.phase === 'victory') { onVictory(); return; }
+      if (bs.phase === 'defeat')  { onDefeat();  return; }
 
-    // Start next planning phase
-    startPlanningTimer();
+      startPlanningTimer();
+    });
   }
 
   // ── Canvas interaction ────────────────────────────────────────────────────
@@ -609,6 +621,49 @@ const KingPanel = (() => {
     resultDiv.style.display = 'flex';
     _el('king-result-text').textContent = text;
     _el('king-result-text').style.color = color;
+    renderBattleStats();
+  }
+
+  function renderBattleStats() {
+    const statsEl = _el('king-battle-stats');
+    if (!statsEl) return;
+    const raw = KingBattle.getUnitStats();
+    const units = Object.values(raw);
+    if (!units.length) { statsEl.innerHTML = ''; return; }
+
+    // Sort by damage descending for the "top" highlight
+    const sorted = [...units].sort((a, b) => b.damage - a.damage);
+    const topDmg = sorted[0];
+    const topKills = [...units].sort((a, b) => b.kills - a.kills)[0];
+
+    const teamLabel = t => t === 'player' ? '🟢' : '🔴';
+
+    const rows = sorted.map(u => {
+      const acc = u.hits + u.misses > 0
+        ? Math.round(100 * u.hits / (u.hits + u.misses)) + '%'
+        : '—';
+      const highlight = u === topDmg ? ' class="king-stat-top"' : '';
+      return `<tr${highlight}>
+        <td>${teamLabel(u.team)} ${u.name}</td>
+        <td>${u.hits}</td><td>${u.misses}</td>
+        <td>${acc}</td>
+        <td>${u.damage.toFixed(2)}</td>
+        <td>${u.kills}</td>
+      </tr>`;
+    }).join('');
+
+    statsEl.innerHTML = `
+      <div class="king-stat-notes">
+        Most damage: <strong>${topDmg.name}</strong> (${topDmg.damage.toFixed(2)}) &nbsp;|&nbsp;
+        Most kills: <strong>${topKills.name}</strong> (${topKills.kills})
+      </div>
+      <table class="king-stat-table">
+        <thead><tr>
+          <th>Unit</th><th>Hits</th><th>Misses</th><th>Acc</th><th>Damage</th><th>Kills</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
   }
 
   // ── Standalone mode ───────────────────────────────────────────────────────

@@ -191,11 +191,11 @@ const MOBS = (() => {
   {
     const GRADES = [
       { adj: 'Feeble', domStat:  6, otherStat: 2, hearts: 1, tier: 0 },
-      { adj: 'Weak',   domStat: 10, otherStat: 3, hearts: 2, tier: 0 },
-      { adj: 'Wild',   domStat: 14, otherStat: 4, hearts: 3, tier: 1 },
-      { adj: 'Rabid',  domStat: 19, otherStat: 5, hearts: 4, tier: 1 },
-      { adj: 'Fierce', domStat: 25, otherStat: 7, hearts: 5, tier: 2 },
-      { adj: 'Savage', domStat: 32, otherStat: 9, hearts: 6, tier: 3 },
+      { adj: 'Weak',   domStat: 10, otherStat: 3, hearts: 1, tier: 0 },
+      { adj: 'Wild',   domStat: 14, otherStat: 4, hearts: 1, tier: 1 },
+      { adj: 'Rabid',  domStat: 19, otherStat: 5, hearts: 2, tier: 1 },
+      { adj: 'Fierce', domStat: 25, otherStat: 7, hearts: 2, tier: 2 },
+      { adj: 'Savage', domStat: 32, otherStat: 9, hearts: 2, tier: 3 },
     ];
     const SPECIES = [
       { id: 'bear',    name: 'Bear',    dom: 'F'    },

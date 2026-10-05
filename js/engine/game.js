@@ -22,6 +22,7 @@ const Game = (() => {
     MAP_CHOICE:      'map_choice',
     LOOT_CONFIRM:    'loot_confirm',
     TELEPORT_CHOICE: 'teleport_choice',
+    CLOAK_CHOICE:    'cloak_choice',
     KING_BATTLE:     'king_battle',
     GAME_OVER:       'game_over',
   };
@@ -47,6 +48,9 @@ const Game = (() => {
     pendingPriest:        null,   // { buff }
     pendingLootDescription: null, // string shown in loot popup
     pendingLootCallback:    null, // fn called when loot popup is confirmed
+    pendingHealItemId:      null, // itemId waiting for heal-target selection
+    pendingCloakMob:        null, // mob stored for CLOAK_CHOICE phase
+    pendingCloakTier:       null, // miniboss tier for that mob
     mapForcedRoll:          null, // 1-6 chosen by player when using Map item
     mapChoiceShown:         false,// prevents re-entry into MAP_CHOICE
     teleportReturnPhase:    null, // phase to restore if teleport is cancelled
@@ -177,7 +181,7 @@ const Game = (() => {
       items = [...equipment, ...POTIONS, ...OBJECTS];
     }
 
-    const potionIds = new Set([...POTIONS, ...COMBAT_SPELLS, ...UTILITY_SPELLS].map(i => i.id));
+    const potionIds = new Set([...POTIONS, ...COMBAT_SPELLS, ...UTILITY_SPELLS, ...OBJECTS].map(i => i.id));
     const stock = {};
     for (const item of items) stock[item.id] = potionIds.has(item.id) ? 10 : qty;
     state.shopStocks[key] = stock;
@@ -311,6 +315,11 @@ const Game = (() => {
       handleUseItem(action.itemId);
       return;
     }
+    // heal_target resolves a pending heal-target selection (no phase restriction)
+    if (action?.type === 'heal_target' && state.pendingHealItemId) {
+      handleHealTarget(action.target);
+      return;
+    }
     // Equip/unequip are available in any phase except combat and game-over
     if (action?.type === 'equip' &&
         state.phase !== Phase.COMBAT && state.phase !== Phase.PVP_COMBAT &&
@@ -400,6 +409,21 @@ const Game = (() => {
         }
         break;
 
+      case Phase.CLOAK_CHOICE: {
+        const mob  = state.pendingCloakMob;
+        const tier = state.pendingCloakTier;
+        state.pendingCloakMob  = null;
+        state.pendingCloakTier = null;
+        if (action?.type === 'cloak_fight') {
+          if (mob) startCombat(mob, false, null, tier);
+          else endTileInteraction();
+        } else if (action?.type === 'cloak_sneak') {
+          log(`${current().name} slips past ${mob?.name ?? 'the enemy'} unseen (Invisibility Cloak).`);
+          endTileInteraction();
+        }
+        break;
+      }
+
       case Phase.CHEST:
         if (action?.type === 'chest_pick') {
           state.pendingChestRolls = null;
@@ -428,7 +452,6 @@ const Game = (() => {
     player.consumeTempBonus('V');
     state.reachableTiles  = Movement.getReachable(player.position, state.movementCap, player);
     state.stopBlockedTiles = Movement.getStopBlockedTiles(player.position, state.movementCap, player);
-    log(`${player.name} rolls movement: ${state.movementCap}`);
     state.phase = Phase.MOVING;
     emit('state_change', {
       phase: state.phase,
@@ -458,11 +481,10 @@ const Game = (() => {
       if (stopTile) {
         player.position = { ...stopTile };
         player.markTileUsed(stopTile.x, stopTile.y);
-        log(`${player.name} moves to (${stopTile.x}, ${stopTile.y})`);
         emit('player_moved', { player: player.name, position: stopTile });
 
         const roll = Dice.d6();
-        log(`${player.name} hits a Stop tile — rolls ${roll}`);
+        log(`${player.name} hits Stop at (${stopTile.x},${stopTile.y}) — rolls ${roll}`);
 
         if (roll <= 3) {
           log(`${player.name} is stopped!`);
@@ -482,7 +504,7 @@ const Game = (() => {
 
     const tilesWalked = state.reachableTiles.get(destKey) ?? 0;
     player.position = { ...dest };
-    log(`${player.name} moves to (${dest.x}, ${dest.y})`);
+    log(`${player.name} → (${dest.x},${dest.y}) [roll ${state.movementCap}]`);
     emit('player_moved', { player: player.name, position: dest });
     player.gainXP('V', tilesWalked / 10);
     player.gainXP('A', Math.min(2, tilesWalked / calcInventoryWeight(player)));
@@ -533,13 +555,20 @@ const Game = (() => {
 
       case TileType.MINIBOSS: {
         if (player.hasUsedTile(x, y)) { log(`${player.name}: the enemy here was already defeated.`); endTileInteraction(); break; }
-        if (player.hasEquipped('invis_cloak')) { log(`${player.name} slips past unseen (Invisibility Cloak).`); endTileInteraction(); break; }
         player.markTileUsed(x, y);
-        const tier = tData.minibossTier ?? 1;
-        const pool = MOBS.getByTier(tier).filter(m => !m.isBoss);
-        const idx  = rollOrForced() - 1;
+        const tier   = tData.minibossTier ?? 1;
+        const pool   = MOBS.getByTier(tier).filter(m => !m.isBoss);
+        const idx    = rollOrForced() - 1;
         const picked = pool[idx % pool.length] ?? null;
-        if (picked) startCombat(MOBS.spawn(picked.id), false, null, tier);
+        const spawnedMob = picked ? MOBS.spawn(picked.id) : null;
+        if (player.hasEquipped('invis_cloak') && spawnedMob) {
+          state.pendingCloakMob  = spawnedMob;
+          state.pendingCloakTier = tier;
+          state.phase = Phase.CLOAK_CHOICE;
+          emit('state_change', { phase: state.phase, player: player.name, mob: spawnedMob });
+          break;
+        }
+        if (spawnedMob) startCombat(spawnedMob, false, null, tier);
         else endTileInteraction();
         break;
       }
@@ -630,7 +659,7 @@ const Game = (() => {
         if (player.coins >= barCost && player.hearts.current < player.hearts.max) {
           player.coins -= barCost;
           player.healHeart(1);
-          log(`${player.name} pays ${barCost} coins at the bar — restored 1 heart`);
+          log(`${player.name}: bar −${barCost}g +1❤`);
           emit('coins_changed', { player: player.name, coins: player.coins, delta: -barCost });
         } else if (player.hearts.current >= player.hearts.max) {
           log(`${player.name} is already at full health`);
@@ -643,7 +672,7 @@ const Game = (() => {
 
       case TileType.FIRE:
         player.hearts.current = player.hearts.max;
-        log(`${player.name} rests at the fire — full health restored`);
+        log(`${player.name}: fire — full health`);
         emit('healed', { player: player.name });
         endTileInteraction();
         break;
@@ -748,16 +777,20 @@ const Game = (() => {
     if (lootItem) lootTable.push({ itemId: lootItem.id });
     lootTable.push({ rollForStat: true, potionValue: Math.ceil(Math.random() * 3) });
 
+    const speciesId = cat.animal.toLowerCase();
+    const gradeId   = adjective.toLowerCase();
+    const hp = ['feeble','weak','wild'].includes(gradeId) ? 1 : 2;
     return {
-      id: `gen_${cat.animal.toLowerCase()}`,
+      id: `${speciesId}_${gradeId}`,
       name: `${adjective} ${cat.animal}`,
       tier: zone,
       stats: statValues,
-      hearts: { current: zone + 1, max: zone + 1 },
+      hearts: { current: hp, max: hp },
       lootTable,
       coins: 0,
       coinDice: 2,
       statusEffects: [],
+      isAnimal: true,
     };
   }
 
@@ -765,33 +798,31 @@ const Game = (() => {
   function resolveRandomEvent(player) {
     const roll = rollOrForced();
     const zone = zoneTierAt(player.position.x, player.position.y);
-    log(`${player.name} lands on ? — rolls ${roll}`);
-
     if (roll <= 2) {
       // Generated mob scaled to zone + difficulty
       const mob = generateRandomMob(zone, state.difficulty);
-      log(`A wild ${mob.name} appears!`);
+      log(`${player.name} ? (${roll}) — ${mob.name} appears!`);
       player.gainXP('F', 1); player.gainXP('D', 1); player.gainXP('M', 1);
       startCombat(mob, false);
     } else if (roll === 3) {
       // Zone miniboss from catalog
       const template = randomMobByTier(zone);
       const mob = template ? MOBS.spawn(template.id) : generateRandomMob(zone, state.difficulty);
-      log(`A zone miniboss appears: ${mob.name}!`);
+      log(`${player.name} ? (${roll}) — miniboss ${mob.name}!`);
       player.gainXP('F', 1); player.gainXP('D', 1); player.gainXP('M', 1);
       startCombat(mob, false);
     } else if (roll === 4) {
       // Find 3d6 coins
       let found = 0; for (let i = 0; i < 3; i++) found += Dice.d6();
       player.coins += found;
-      log(`${player.name} finds ${found} coins`);
+      log(`${player.name} ? (${roll}) — finds ${found}g`);
       emit('coins_changed', { player: player.name, coins: player.coins, delta: found });
       showLootConfirm(`Found ${found} coins!`);
     } else if (roll === 5) {
       // Find 5d6 coins
       let found = 0; for (let i = 0; i < 5; i++) found += Dice.d6();
       player.coins += found;
-      log(`${player.name} finds ${found} coins`);
+      log(`${player.name} ? (${roll}) — finds ${found}g`);
       emit('coins_changed', { player: player.name, coins: player.coins, delta: found });
       showLootConfirm(`Found ${found} coins!`);
     } else {
@@ -801,7 +832,7 @@ const Game = (() => {
       const item = randomTierItem(minTier, maxTier);
       if (item) {
         player.addItem(item.id);
-        log(`${player.name} finds: ${item.name}`);
+        log(`${player.name} ? (${roll}) — finds: ${item.name}`);
         emit('item_found', { player: player.name, item });
         showLootConfirm(`Found: ${item.name}`);
       } else {
@@ -813,34 +844,36 @@ const Game = (() => {
   // ── Chest ─────────────────────────────────────────────────────────────────
   function resolveChestRoll(player, roll) {
     let desc;
+    let chestCoins = 0, chestItemId = null;
     if (roll === 1) {
       log(`Chest is empty`);
       desc = 'The chest is empty.';
     } else if (roll === 2) {
-      const coins = Dice.d6() * 3;
-      player.coins += coins;
-      log(`${player.name} finds ${coins} coins`);
-      emit('coins_changed', { player: player.name, coins: player.coins, delta: coins });
-      desc = `Found ${coins} coins!`;
+      chestCoins = Dice.d6() * 3;
+      player.coins += chestCoins;
+      log(`${player.name} finds ${chestCoins} coins`);
+      emit('coins_changed', { player: player.name, coins: player.coins, delta: chestCoins });
+      desc = `Found ${chestCoins} coins!`;
     } else if (roll === 3) {
       const item = randomConsumable();
-      if (item) { player.addItem(item.id); log(`${player.name} finds: ${item.name}`); }
+      if (item) { chestItemId = item.id; player.addItem(item.id); log(`${player.name} finds: ${item.name}`); }
       desc = item ? `Found: ${item.name}` : 'Found nothing.';
     } else if (roll === 4) {
-      const coins = Dice.d6() * 10;
-      player.coins += coins;
-      log(`${player.name} finds ${coins} coins`);
-      emit('coins_changed', { player: player.name, coins: player.coins, delta: coins });
-      desc = `Found ${coins} coins!`;
+      chestCoins = Dice.d6() * 10;
+      player.coins += chestCoins;
+      log(`${player.name} finds ${chestCoins} coins`);
+      emit('coins_changed', { player: player.name, coins: player.coins, delta: chestCoins });
+      desc = `Found ${chestCoins} coins!`;
     } else if (roll === 5) {
       const item = randomTierItem(1, 2);
-      if (item) { player.addItem(item.id); log(`${player.name} finds: ${item.name}`); }
+      if (item) { chestItemId = item.id; player.addItem(item.id); log(`${player.name} finds: ${item.name}`); }
       desc = item ? `Found: ${item.name}` : 'Found nothing.';
     } else {
       const item = randomTierItem(3, 6);
-      if (item) { player.addItem(item.id); log(`${player.name} finds: ${item.name}`); }
+      if (item) { chestItemId = item.id; player.addItem(item.id); log(`${player.name} finds: ${item.name}`); }
       desc = item ? `Found: ${item.name}` : 'Found nothing.';
     }
+    emit('chest_opened', { player: player.name, isEmpty: roll === 1, coins: chestCoins, itemId: chestItemId });
     showLootConfirm(desc);
   }
 
@@ -877,7 +910,7 @@ const Game = (() => {
     const earned   = zoneTier * diceRoll * baseStat;
 
     player.coins += earned;
-    log(`${player.name} works (zone ${zoneTier}) — ${stat} ${baseStat} × d6=${diceRoll} = ${earned} coins`);
+    log(`${player.name} works: +${earned}g (${stat}${baseStat}×${diceRoll}, zone ${zoneTier})`);
     emit('coins_changed', { player: player.name, coins: player.coins, delta: earned });
     showLootConfirm(`You earned ${earned} coins from work! (zone ${zoneTier} × ${stat}=${baseStat} × roll=${diceRoll})`);
   }
@@ -896,7 +929,7 @@ const Game = (() => {
     const roll   = rollOrForced();
     const itemId = `priest_pot_${roll}`;
     player.addItem(itemId);
-    log(`${player.name} receives a Holy Blessing +${roll} (all stats for one roll)`);
+    log(`${player.name}: Holy Blessing +${roll} (all stats, one roll)`);
     emit('priest_buff', { player: player.name, roll });
     showLootConfirm(`The priest blesses you: Holy Blessing +${roll}!\nUse it from inventory to apply +${roll} to ALL stats for your next roll.`);
   }
@@ -1003,7 +1036,7 @@ const Game = (() => {
     player.coins -= cost;
     player.baseStats[stat]++;
     player.masterSkillsBought++;
-    log(`${player.name} upgrades ${stat} to ${player.baseStats[stat]} for ${cost} coins [${player.masterSkillsBought}/5 master purchases]`);
+    log(`${player.name} upgrades ${stat}→${player.baseStats[stat]} (${cost}g, ${player.masterSkillsBought}/5)`);
     emit('skill_upgraded', { player: player.name, stat, newValue: player.baseStats[stat] });
   }
 
@@ -1151,8 +1184,25 @@ const Game = (() => {
     if (eff) {
       if (eff.type === 'heal') {
         const amount = eff.value ?? 1;
+        // Ask who to heal if any companion is damaged
+        const deployed = state.pendingCombat?.deployedFriend;
+        const damagedFriends = [
+          ...(deployed && deployed.hearts.current < deployed.hearts.max ? [deployed] : []),
+          ...player.friendsList.filter(f => f.hearts.current < f.hearts.max),
+        ];
+        if (damagedFriends.length > 0) {
+          state.pendingHealItemId = itemId;
+          emit('heal_target_pending', {
+            player: player.name,
+            itemName: item.name,
+            amount,
+            playerHearts: { current: player.hearts.current, max: player.hearts.max },
+            friends: damagedFriends.map(f => ({ uid: f.uid, name: f.name, current: f.hearts.current, max: f.hearts.max })),
+          });
+          return; // item not consumed yet — wait for heal_target action
+        }
         player.healHeart(amount);
-        log(`${player.name} uses ${item.name} — +${amount} heart(s)`);
+        log(`${player.name} uses ${item.name} — +${amount} ❤`);
       } else if (eff.type === 'all_stats') {
         // Priest blessing: +N to every stat for exactly one roll
         if (player.priestBuff > 0) {
@@ -1205,6 +1255,33 @@ const Game = (() => {
     emit('item_used', { player: player.name, item });
   }
 
+  // ── Heal target (companion picker) ───────────────────────────────────────
+  function handleHealTarget(target) {
+    const player = current();
+    const itemId = state.pendingHealItemId;
+    state.pendingHealItemId = null;
+    if (!itemId) return;
+    const item = getItem(itemId);
+    if (!item || !player.hasItem(itemId)) return;
+    const amount = item.effect?.value ?? 1;
+
+    if (target === 'player') {
+      player.healHeart(amount);
+      log(`${player.name} uses ${item.name} — +${amount} ❤ (${player.hearts.current}/${player.hearts.max})`);
+    } else {
+      const deployed = state.pendingCombat?.deployedFriend;
+      const friend   = (deployed?.uid === target)
+        ? deployed
+        : player.friendsList.find(f => f.uid === target);
+      if (!friend) return;
+      friend.hearts.current = Math.min(friend.hearts.current + amount, friend.hearts.max);
+      log(`${player.name} uses ${item.name} on ${friend.name} — +${amount} ❤ (${friend.hearts.current}/${friend.hearts.max})`);
+    }
+
+    player.removeItem(itemId);
+    emit('item_used', { player: player.name, item });
+  }
+
   // ── Combat ────────────────────────────────────────────────────────────────
   // Pre-roll and announce the mob's next attack type. Call after pendingCombat is set.
   function prepareNextMobAttack(mob, fightLog) {
@@ -1223,10 +1300,12 @@ const Game = (() => {
   }
 
   // ── Guild item leveling ───────────────────────────────────────────────────
-  // mb-units needed to reach each level (index = currentLevel - 1)
+  // mb-units needed to reach each level (index = currentLevel - 1) — non-charisma items
   const GUILD_MB_THRESHOLDS = [3, 6, 12, 24, 24];
   // Zone weights: tier 0→1, 1→2, 2→4, 3→8
   const ZONE_WEIGHT = [1, 2, 4, 8];
+  // Magic Flute (charisma): ability-unit requirements per level (Lv.1→8, 7 steps)
+  const FLUTE_THRESHOLDS = [3, 6, 12, 18, 27, 36, 54, 72];
 
   // Secondary (HP / parry / ability) threshold multiplier per slot category
   function guildSecMult(slot) {
@@ -1271,32 +1350,65 @@ const Game = (() => {
     }
   }
 
-  // Called after winning a miniboss fight via a charisma category (not flee/bail).
-  // Updates progress only for the equipped charisma guild item.
-  // combatData.combatAbilityUnits must already be zone-weighted.
+  // Called after ending a miniboss encounter via a charisma ability.
+  // Levels the Magic Flute (max Lv.8) using a single ability-unit counter (no zone weighting).
   function applyCharismaProgress(player, combatData) {
     const { minibossTier, combatAbilityUnits } = combatData;
     if (minibossTier == null) return;
-    const zw = ZONE_WEIGHT[minibossTier] ?? 1;
 
     const item = player.equipped['charisma'];
     if (!item?.guild) return;
 
     const lvlData = player.guildItemLevels[item.id];
-    if (!lvlData || lvlData.itemLevel >= 6) return;
+    if (!lvlData || lvlData.itemLevel >= 8) return;
 
-    const idx     = lvlData.itemLevel - 1;
-    const mbNeed  = GUILD_MB_THRESHOLDS[idx];
-    const secNeed = mbNeed * 6;
+    const idx       = lvlData.itemLevel - 1; // 0..6
+    const threshold = FLUTE_THRESHOLDS[idx];
 
-    lvlData.levelProgress.mbUnits        += zw;
     lvlData.levelProgress.secondaryUnits += combatAbilityUnits;
 
-    if (lvlData.levelProgress.mbUnits >= mbNeed &&
-        lvlData.levelProgress.secondaryUnits >= secNeed) {
+    if (lvlData.levelProgress.secondaryUnits >= threshold) {
       lvlData.itemLevel++;
       lvlData.levelProgress = { mbUnits: 0, secondaryUnits: 0 };
       log(`${player.name}'s ${item.name} reaches Lv.${lvlData.itemLevel}! (+1 C)`);
+    }
+  }
+
+  // ── Animal companion evolution ────────────────────────────────────────────
+  const ANIMAL_GRADES    = ['feeble','weak','wild','rabid','fierce','savage'];
+  const ANIMAL_KILL_REQS = [1, 1, 1, 2, 2]; // kills needed to advance from grade index 0..4
+
+  // Called when a deployed animal friend wins a fight (kills the mob).
+  // Heals it to full (unless Savage) and advances its grade when kill threshold is met.
+  function tryEvolveAnimal(friend) {
+    if (!friend.isAnimal) return;
+    const parts    = friend.id.split('_');
+    const grade    = parts[parts.length - 1];
+    const species  = parts.slice(0, -1).join('_');
+    const gradeIdx = ANIMAL_GRADES.indexOf(grade);
+
+    if (gradeIdx < 0 || gradeIdx >= ANIMAL_GRADES.length - 1) return; // savage or unknown
+
+    // Non-savage: always heal to full on a win
+    friend.hearts.current = friend.hearts.max;
+
+    friend.evolutionKills = (friend.evolutionKills ?? 0) + 1;
+    const needed = ANIMAL_KILL_REQS[gradeIdx] ?? 1;
+
+    if (friend.evolutionKills >= needed) {
+      const nextGrade    = ANIMAL_GRADES[gradeIdx + 1];
+      const nextId       = `${species}_${nextGrade}`;
+      const nextTemplate = MOBS.getMob(nextId);
+      if (!nextTemplate) return;
+      const oldName          = friend.name;
+      friend.id              = nextId;
+      friend.name            = nextTemplate.name;
+      friend.stats           = { ...nextTemplate.stats };
+      friend.hearts          = { current: nextTemplate.hearts.max, max: nextTemplate.hearts.max };
+      friend.evolutionKills  = 0;
+      log(`${oldName} evolves into ${friend.name}! (fully healed)`);
+    } else {
+      log(`${friend.name} fully healed. (${friend.evolutionKills}/${needed} kills toward evolution)`);
     }
   }
 
@@ -1338,7 +1450,8 @@ const Game = (() => {
         applyMinibossProgress(player, { minibossTier, combatHpDealt: 1, combatParries: 0 });
       }
       grantLoot(player, initResult.loot);
-      emit('combat_victory', { player: player.name, mob: mob.name, loot: initResult.loot });
+      emit('combat_victory', { player: player.name, mob: mob.name, loot: initResult.loot,
+        mobTier: mob.tier ?? 0, isAnimal: mob.isAnimal ?? false, mapZone: zoneTierAt(player.position.x, player.position.y) });
       const lootDesc = buildLootDescription(initResult.loot);
       showLootConfirm(`${mob.name} defeated! Loot: ${lootDesc}`, onCompleteCallback ?? null);
       return;
@@ -1375,10 +1488,14 @@ const Game = (() => {
     const subPhase = state.pendingCombat.combatSubPhase;
 
     let result;
+    let skillUsed = null;
     if (subPhase === 'player_attack') {
       if (action.type !== 'attack' && action.type !== 'bail' && action.type !== 'run' && action.type !== 'bard') return;
       if (action.type === 'attack' && action.attackType) {
         state.pendingCombat.fightAttackTypes.add(action.attackType);
+        skillUsed = action.attackType;
+      } else if (action.type === 'bard') {
+        skillUsed = 'C';
       }
       const prevMobHearts = mob.hearts.current;
       result = Combat.takePlayerAttack(player, mob, action, fightLog);
@@ -1396,6 +1513,7 @@ const Game = (() => {
           outcome: 'charisma_pending',
           combatSubPhase: 'charisma_pick',
           charismaResult: result.charismaResult,
+          skillUsed,
         });
         return;
       }
@@ -1420,6 +1538,11 @@ const Game = (() => {
         state.pendingCombat.combatSubPhase  = 'player_attack';
         state.pendingCombat.curseUsedThisTurn = false;
       }
+      // Defense stat used: F→A, D→V, M→M (or A with Arcane), C→C
+      const _defMap = { F: 'A', D: 'V', M: 'M', C: 'C' };
+      skillUsed = (preRolledAtk === 'M' && player.equipped?.Armor?.enchantment === 'arcane')
+        ? 'A'
+        : (_defMap[preRolledAtk] ?? null);
     }
 
     if (result.coinsChanged) emit('coins_changed', { player: player.name, coins: player.coins });
@@ -1429,6 +1552,7 @@ const Game = (() => {
       newLog: result.newLog ?? [],
       outcome: result.outcome,
       combatSubPhase: state.pendingCombat?.combatSubPhase,
+      skillUsed,
     });
 
     if (result.outcome === 'ongoing') return;
@@ -1450,7 +1574,8 @@ const Game = (() => {
       }
       log(`${player.name} defeats ${mob.name}`);
       grantLoot(player, result.loot);
-      emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot });
+      emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot,
+        mobTier: mob.tier ?? 0, isAnimal: mob.isAnimal ?? false, mapZone: zoneTierAt(player.position.x, player.position.y) });
       if (savedCombat.isBoss) state.defeatedBosses.add(mob.id);
       if (mob.id === 'dragon') {
         state.dragonDefeated = true;
@@ -1490,11 +1615,10 @@ const Game = (() => {
       return;
     }
 
-    // Track ability units for C guild item leveling (zone-weighted at source)
+    // Track ability units for Magic Flute leveling: T1=2, T2=4, T3=6 (no zone weighting)
     if (state.pendingCombat?.minibossTier != null && action.tier) {
-      const ABILITY_PTS = { 1: 2, 2: 3, 3: 6 };
-      const zw = ZONE_WEIGHT[state.pendingCombat.minibossTier] ?? 1;
-      state.pendingCombat.combatAbilityUnits += (ABILITY_PTS[action.tier] ?? 0) * zw;
+      const ABILITY_PTS = { 1: 2, 2: 4, 3: 6 };
+      state.pendingCombat.combatAbilityUnits += ABILITY_PTS[action.tier] ?? 0;
     }
 
     // C XP per charisma interaction, capped at 10 per fight (same as combat XP)
@@ -1529,7 +1653,8 @@ const Game = (() => {
       log(`${player.name} defeats ${mob.name}`);
       grantLoot(player, result.loot);
       emit('combat_update', { player: player.name, mob, newLog, logType: 'bard', outcome: 'victory' });
-      emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot });
+      emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot,
+        mobTier: mob.tier ?? 0, isAnimal: mob.isAnimal ?? false, mapZone: zoneTierAt(player.position.x, player.position.y) });
       if (savedCombat.isBoss) state.defeatedBosses.add(mob.id);
       if (mob.id === 'dragon') {
         state.dragonDefeated = true;
@@ -1552,7 +1677,8 @@ const Game = (() => {
         applyCharismaProgress(player, savedCombat);
       }
       emit('combat_update', { player: player.name, mob, newLog, logType: 'bard', outcome: 'charisma_end' });
-      log(`${player.name} ends the encounter with ${mob.name}`);
+      const cDesc = newLog.length ? (typeof newLog[newLog.length - 1] === 'object' ? newLog[newLog.length - 1].text : newLog[newLog.length - 1]) : '';
+      log(`${player.name} ends encounter with ${mob.name}${cDesc ? ' — ' + cDesc : ''}`);
       endTileInteraction();
     }
   }
@@ -1589,6 +1715,7 @@ const Game = (() => {
     const result = Combat.resolveFriendRound(deployedFriend, mob, player, fightLog);
 
     if (result.outcome === 'victory') {
+      tryEvolveAnimal(deployedFriend);
       player.friendsList.push({ ...deployedFriend });
       const savedCombat = state.pendingCombat;
       state.pendingCombat = null;
@@ -1598,7 +1725,8 @@ const Game = (() => {
       log(`${deployedFriend.name} defeats ${mob.name} for ${player.name}`);
       grantLoot(player, result.loot);
       emit('combat_update', { player: player.name, mob, newLog: result.newLog, outcome: 'victory' });
-      emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot });
+      emit('combat_victory', { player: player.name, mob: mob.name, loot: result.loot,
+        mobTier: mob.tier ?? 0, isAnimal: mob.isAnimal ?? false, mapZone: zoneTierAt(player.position.x, player.position.y) });
       if (savedCombat.isBoss) state.defeatedBosses.add(mob.id);
       if (mob.id === 'dragon') {
         state.dragonDefeated = true;

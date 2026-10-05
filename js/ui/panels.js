@@ -30,7 +30,7 @@ const Panels = (() => {
       case 'sell_75pct':          return 'Sell items for 75% of buy price instead of 50%';
       case 'double_chest':        return 'Roll chest twice — choose which result to keep';
       case 'all_drops':           return 'All loot items drop in double quantity';
-      case 'bard_lv8_free':       return 'C stat can be raised to 8 at Master; all charisma tiers unlocked freely';
+      case 'c_cap_8':             return 'C stat can be raised to 8 at Master; gains +1 C per level (max Lv.8, via miniboss charisma encounters)';
       case 'deceive_double_coins':return 'Charisma "deceive" outcomes yield double coins';
       case 'coins_times2':        return 'Coins earned from kills are doubled';
       case 'pickpocket':          return 'Successful DEX attacks also steal 2×d6 coins';
@@ -117,6 +117,8 @@ const Panels = (() => {
       }
     });
 
+    Game.on('heal_target_pending', data => showHealTargetModal(data));
+
     // Refresh master panel after skill purchase or enchant
     Game.on('skill_upgraded', () => {
       if (Game.getState().phase === Game.Phase.MASTER) {
@@ -137,6 +139,7 @@ const Panels = (() => {
       const emitColor = data.logType === 'curse' ? '#c470e0'
                       : data.logType === 'bard'  ? '#ffd080'
                       : null;
+      const frag = document.createDocumentFragment();
       (data.newLog ?? []).forEach(entry => {
         const d = document.createElement('div');
         if (entry !== null && typeof entry === 'object') {
@@ -149,9 +152,9 @@ const Panels = (() => {
           d.textContent = entry;
           if (emitColor) d.style.color = emitColor;
         }
-        logEl.appendChild(d);
+        frag.appendChild(d);
       });
-      logEl.scrollTop = logEl.scrollHeight;
+      logEl.insertBefore(frag, logEl.firstChild);
 
       if (data.mob) {
         const mobHeartsEl = _el('combat-enemy-info')?.querySelector('.combat-hearts');
@@ -236,6 +239,9 @@ const Panels = (() => {
       case Game.Phase.TELEPORT_CHOICE:
         showTeleportChoice(data);
         break;
+      case Game.Phase.CLOAK_CHOICE:
+        showCloakChoice(data);
+        break;
       case Game.Phase.KING_BATTLE:
         KingPanel.show();
         break;
@@ -314,6 +320,7 @@ const Panels = (() => {
     // Populate initial fight log (Kryss + initiative lines, maybe mob's first attack)
     const logEl = _el('combat-log');
     logEl.innerHTML = '';
+    const initFrag = document.createDocumentFragment();
     (data.fightLog ?? []).forEach(entry => {
       const d = document.createElement('div');
       if (entry !== null && typeof entry === 'object') {
@@ -325,9 +332,9 @@ const Panels = (() => {
       } else {
         d.textContent = entry;
       }
-      logEl.appendChild(d);
+      initFrag.appendChild(d);
     });
-    logEl.scrollTop = logEl.scrollHeight;
+    logEl.insertBefore(initFrag, logEl.firstChild);
 
     setCombatPhase(data.combatSubPhase ?? 'player_attack');
 
@@ -561,8 +568,7 @@ const Panels = (() => {
       return;
     }
 
-    const hasFlute = player?.hasEquipped('magic_flute_thief');
-    const maxTier = hasFlute ? 3 : diff >= 7 ? 3 : diff >= 5 ? 2 : 1;
+    const maxTier = diff >= 7 ? 3 : diff >= 5 ? 2 : 1;
     const hasRattle = player?.hasEquipped('cursed_rattle');
 
     const families = [
@@ -1149,6 +1155,20 @@ const Panels = (() => {
     }
   }
 
+  // ── Cloak choice (Invisibility Cloak on MINIBOSS tile) ───────────────────
+  function showCloakChoice(data) {
+    const mob = data.mob;
+    showModal('modal-cloak-choice');
+    _el('cloak-mob-name').textContent = mob ? mob.name : 'an enemy';
+    function closeCloakModal() {
+      _el('modal-cloak-choice').classList.add('hidden');
+      if (!document.querySelectorAll('.modal:not(.hidden)').length)
+        _el('overlay').classList.add('hidden');
+    }
+    _el('btn-cloak-fight').onclick = () => { closeCloakModal(); Game.submitAction({ type: 'cloak_fight' }); };
+    _el('btn-cloak-sneak').onclick = () => { closeCloakModal(); Game.submitAction({ type: 'cloak_sneak' }); };
+  }
+
   // ── Teleport choice ──────────────────────────────────────────────────────
   function showTeleportChoice(data) {
     showModal('modal-teleport');
@@ -1277,11 +1297,41 @@ const Panels = (() => {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href     = url;
-    a.download = fileName;
+    a.download = `wins/${fileName}`;
     a.click();
     URL.revokeObjectURL(url);
 
     localStorage.setItem('dandd_run_count', String(runNum));
+  }
+
+  // ── Heal target modal ─────────────────────────────────────────────────────
+  function showHealTargetModal(data) {
+    showModal('modal-heal-target');
+    const list = _el('heal-target-list');
+    list.innerHTML = '';
+
+    function pick(target) {
+      Game.submitAction({ type: 'heal_target', target });
+      _el('modal-heal-target').classList.add('hidden');
+      const anyVisible = document.querySelectorAll('.modal:not(.hidden)').length > 0;
+      if (!anyVisible) _el('overlay').classList.add('hidden');
+    }
+
+    // Player option
+    const playerBtn = document.createElement('button');
+    playerBtn.className = 'heal-target-btn';
+    playerBtn.innerHTML = `<strong>${data.player}</strong> <span class="heal-target-hp">❤ ${data.playerHearts.current}/${data.playerHearts.max}</span>`;
+    playerBtn.addEventListener('click', () => pick('player'));
+    list.appendChild(playerBtn);
+
+    // Friend options
+    data.friends.forEach(f => {
+      const btn = document.createElement('button');
+      btn.className = 'heal-target-btn';
+      btn.innerHTML = `<strong>${f.name}</strong> <span class="heal-target-hp">❤ ${f.current}/${f.max}</span>`;
+      btn.addEventListener('click', () => pick(f.uid));
+      list.appendChild(btn);
+    });
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

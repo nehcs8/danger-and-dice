@@ -431,16 +431,21 @@ const KingBattle = (() => {
     let aN = atkNum(attacker, isMelee);
     const dN = defNum(target, isMelee);
     if (!isMelee) {
-      const dist = sectorDist(attacker.sectorId, target.sectorId);
-      aN = aN * Math.max(0.3, 1 - (dist - 2) * 0.15);
+      if (attacker.weapon === 'D') {
+        // Dexterity: accuracy falls off with distance
+        const dist = sectorDist(attacker.sectorId, target.sectorId);
+        aN = aN * Math.max(0.3, 1 - (dist - 2) * 0.15);
+      }
+      // Magic: no distance penalty, but damage is reduced
     }
     const aRoll = Math.random() * aN;
     const dRoll = Math.random() * dN;
     const hit = aRoll > dRoll;
     const s = attacker.stats;
-    const wStat     = isMelee ? s.F : s[attacker.weapon];
+    const wStat      = isMelee ? s.F : s[attacker.weapon];
     const otherStats = Math.max(1, s.F + s.D + s.M + s.A + s.V + s.C - wStat);
-    return { hit, damage: hit ? wStat / otherStats : 0, aRoll, dRoll, aN, dN };
+    const damage     = hit ? (wStat / otherStats) * 2 : 0;
+    return { hit, damage, aRoll, dRoll, aN, dN };
   }
 
   // ── Auto-attack ───────────────────────────────────────────────────────────
@@ -468,13 +473,26 @@ const KingBattle = (() => {
     }
 
     const res = resolveHit(unit, target, isMelee);
-    const t = isMelee ? 'melee' : 'ranged';
+    const t = isMelee ? 'melee' : (unit.weapon === 'M' ? 'magic' : 'ranged');
+    state.lastRoundAttacks.push({
+      fromX: unit.pos.x, fromY: unit.pos.y,
+      toX: target.pos.x, toY: target.pos.y,
+      weapon: unit.weapon, isMelee, hit: res.hit,
+    });
+    // Accumulate per-unit stats
+    if (!state.unitStats[unit.uid]) {
+      state.unitStats[unit.uid] = { name: unit.name, team: unit.team, hits: 0, misses: 0, damage: 0, kills: 0 };
+    }
+    const us = state.unitStats[unit.uid];
     if (res.hit) {
       target.hp = Math.max(0, target.hp - res.damage);
       if (target.hp <= 0) { target.hp = 0; target.isAlive = false; }
+      us.hits++;
+      us.damage += res.damage;
+      if (!target.isAlive) { us.kills++; _log(`  ${target.name} falls!`); }
       _log(`${unit.name} ${t} → ${target.name}: ${res.damage.toFixed(2)} dmg`);
-      if (!target.isAlive) _log(`  ${target.name} falls!`);
     } else {
+      us.misses++;
       _log(`${unit.name} ${t} → ${target.name}: miss`);
     }
   }
@@ -498,6 +516,8 @@ const KingBattle = (() => {
     if (state.phase !== 'planning') return;
     state.phase = 'executing';
     state.selectedUid = null;
+    state.lastRoundAttacks = [];
+    if (!state.unitStats) state.unitStats = {};
 
     const ap = state.playerUnits.filter(u => u.isAlive).sort((a,b) => b.stats.V - a.stats.V);
     const ak = state.kingUnits.filter(u => u.isAlive).sort((a,b) => b.stats.V - a.stats.V);
@@ -641,5 +661,7 @@ const KingBattle = (() => {
     reachableCellsFor,
     planMove, cancelMove, planSectorMove, reachableSectorsForSector,
     executeRound,
+    getLastRoundAttacks: () => state.lastRoundAttacks ?? [],
+    getUnitStats: () => state.unitStats ?? {},
   };
 })();
