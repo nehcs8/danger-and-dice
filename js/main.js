@@ -140,6 +140,13 @@
     Game.on('player_defeated', () => Renderer.draw());
     Game.on('dragon_defeated', () => Renderer.draw());
 
+    // PvP duels use the normal combat panel; the opponent may be a bot acting out of turn
+    Game.on('pvp_update', data => {
+      if (data.outcome === 'ongoing' && typeof BotAI.pvpTick === 'function') {
+        setTimeout(() => BotAI.pvpTick(), botDelay(0.67));
+      }
+    });
+
     // Bot chaining for interactive combat (ongoing turns + charisma outcome picks)
     Game.on('combat_update', data => {
       if (data.outcome === 'ongoing' || data.outcome === 'charisma_pending') {

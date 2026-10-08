@@ -136,6 +136,7 @@ const Panels = (() => {
     Game.on('combat_update', data => {
       const logEl = _el('combat-log');
       if (!logEl) return;
+      if (data.pvp) { pvpCombatUpdate(data); return; }
       const emitColor = data.logType === 'curse' ? '#c470e0'
                       : data.logType === 'bard'  ? '#ffd080'
                       : null;
@@ -152,7 +153,7 @@ const Panels = (() => {
           d.textContent = entry;
           if (emitColor) d.style.color = emitColor;
         }
-        frag.appendChild(d);
+        frag.insertBefore(d, frag.firstChild);   // newest line first, also within a batch
       });
       logEl.insertBefore(frag, logEl.firstChild);
 
@@ -257,6 +258,101 @@ const Panels = (() => {
   }
 
   // ── Combat ────────────────────────────────────────────────────────────────
+  // Whose side the combat panel shows. Normally the current player; in a PvP duel the human
+  // participant (the one the fight waits on if both are human), so you can defend out of turn.
+  function inPvp() { return Game.getState().phase === Game.Phase.PVP_COMBAT && !!Game.getPvpView?.(); }
+  function combatSelf() {
+    if (!inPvp()) return Game.getCurrentPlayer();
+    const view = Game.getPvpView(), st = Game.getState();
+    const parts = view.players.map(v => st.players.find(p => p.id === v.id));
+    return parts.find(p => !p.isBot && view.waitingFor.includes(p.id))
+        ?? parts.find(p => !p.isBot)
+        ?? Game.getCurrentPlayer();
+  }
+  function combatEnemy() {
+    if (!inPvp()) return null;
+    const me = combatSelf(), st = Game.getState();
+    const other = Game.getPvpView().players.find(v => v.id !== me.id);
+    return st.players.find(p => p.id === other.id);
+  }
+
+  // A player's stat cell: coloured when potions, blood, curses or blessings change it.
+  // Player roll formula: stat + d6, so range is [eff+1, eff+6].
+  function playerStatCell(p, k) {
+    const eff = p.getStat(k);
+    let fx = (p.tempBonuses?.[k] ?? 0) + (p.priestBuff ?? 0);
+    for (const e of (p.statusEffects ?? [])) if (e.stat === k) fx += e.value ?? 0;
+    const numStr = fx > 0 ? `<span style="color:#9eff9e;font-weight:bold">${eff}</span>`
+                 : fx < 0 ? `<span style="color:#ff9e9e;font-weight:bold">${eff}</span>` : `${eff}`;
+    return inPvp() ? `${numStr} <span style="color:#888;font-size:0.78em">[${eff + 1}~${eff + 6}]</span>` : numStr;
+  }
+  function playerStatsTable(p) {
+    const c = k => playerStatCell(p, k);
+    return `<tr><td>STR</td><td>${c('F')}</td><td>DEX</td><td>${c('D')}</td></tr>
+       <tr><td>ARM</td><td>${c('A')}</td><td>MAG</td><td>${c('M')}</td></tr>
+       <tr><td>CHA</td><td>${c('C')}</td><td>SPD</td><td>${c('V')}</td></tr>`;
+  }
+  // Map the duel state to the panel's sub-phases from *your* point of view.
+  function pvpSubPhase() {
+    const view = Game.getPvpView(), me = combatSelf();
+    if (!view.waitingFor.includes(me.id)) return 'pvp_wait';
+    return view.step === 'defend' ? 'mob_attack' : 'player_attack';
+  }
+
+  function showPvpCombat() {
+    showModal('modal-combat');
+    const me = combatSelf(), foe = combatEnemy(), view = Game.getPvpView();
+    renderPvpSides(me, foe, view);
+    const logEl = _el('combat-log');
+    logEl.innerHTML = '';
+    const frag = document.createDocumentFragment();
+    view.log.forEach(line => { const d = document.createElement('div'); d.textContent = line; frag.insertBefore(d, frag.firstChild); });
+    logEl.insertBefore(frag, logEl.firstChild);
+    _el('charisma-sub-swap')?.classList.add('hidden');
+    _el('charisma-sub-stat')?.classList.add('hidden');
+    _el('charisma-sub-trade')?.classList.add('hidden');
+    _el('friend-picker')?.classList.add('hidden');
+    _el('friend-fighting-ui')?.classList.add('hidden');
+    _el('friend-defeat-ui')?.classList.add('hidden');
+    pvpRefreshControls();
+  }
+
+  function renderPvpSides(me, foe, view) {
+    const tag = (p, v) => [v.chained ? '🔗 chained' : null, v.smoke ? '💨 smoke' : null, p.hasPrincess ? '👑 princess' : null].filter(Boolean).join(' · ');
+    const vOf = p => view.players.find(v => v.id === p.id);
+    _el('combat-enemy-info').innerHTML =
+      `<strong>${foe.name}</strong>${foe.isBot ? ' <span style="color:#888">(bot)</span>' : ''}
+       <div class="combat-hearts">❤ ${foe.hearts.current}/${foe.hearts.max}</div>
+       <div style="font-size:0.78em;color:#c8b8a0">${tag(foe, vOf(foe))}</div>
+       <table class="stats-table">${playerStatsTable(foe)}</table>`;
+    _el('combat-player-info').innerHTML =
+      `<strong>${me.name}</strong>
+       <div class="combat-hearts">❤ ${me.hearts.current}/${me.hearts.max}</div>
+       <div style="font-size:0.78em;color:#c8b8a0">${tag(me, vOf(me))}</div>
+       <table class="stats-table">${playerStatsTable(me)}</table>`;
+  }
+
+  function pvpRefreshControls() {
+    const me = combatSelf(), view = Game.getPvpView();
+    setCombatPhase(pvpSubPhase());
+    refreshCombatConsumables();
+    const magicBtn = document.querySelector('[data-type="M"]');
+    if (magicBtn) magicBtn.disabled = !me.canAttackMagic();
+    const chained = !!view.players.find(v => v.id === me.id)?.chained;
+    _el('btn-bail').disabled = chained || !me.canEscape();
+    _el('btn-run').disabled  = chained;
+  }
+
+  function pvpCombatUpdate(data) {
+    const logEl = _el('combat-log');
+    const frag = document.createDocumentFragment();
+    (data.newLog ?? []).forEach(line => { const d = document.createElement('div'); d.textContent = line; frag.insertBefore(d, frag.firstChild); });
+    logEl.insertBefore(frag, logEl.firstChild);
+    if (!inPvp()) return;                       // fight over — next state_change closes the panel
+    renderPvpSides(combatSelf(), combatEnemy(), Game.getPvpView());
+    pvpRefreshControls();
+  }
+
   // Compute effective mob stat (base + active status effects).
   function getMobEffectiveStat(mob, stat) {
     let v = mob.stats[stat] ?? 0;
@@ -290,6 +386,7 @@ const Panels = (() => {
   }
 
   function showCombat(data) {
+    if (inPvp()) return showPvpCombat();
     showModal('modal-combat');
     const player = Game.getCurrentPlayer();
     const mob    = data.mob ?? data.defender;
@@ -332,7 +429,7 @@ const Panels = (() => {
       } else {
         d.textContent = entry;
       }
-      initFrag.appendChild(d);
+      initFrag.insertBefore(d, initFrag.firstChild);   // newest line first
     });
     logEl.insertBefore(initFrag, logEl.firstChild);
 
@@ -371,7 +468,7 @@ const Panels = (() => {
     });
 
     _el('btn-bail').addEventListener('click', () => {
-      const player  = Game.getCurrentPlayer();
+      const player  = combatSelf();
       const hasShoes = player.hasEquipped('stealth_shoes');
       const hasRope  = player.hasItem('rope');
       const hasInvis = player.hasItem('sp_invisibility');
@@ -418,6 +515,7 @@ const Panels = (() => {
   }
 
   function setCombatPhase(subPhase) {
+    const isWait       = subPhase === 'pvp_wait';
     const isAttack     = subPhase === 'player_attack';
     const isCha        = subPhase === 'charisma_pick';
     const isFriendFight = subPhase === 'friend_fighting';
@@ -430,10 +528,15 @@ const Panels = (() => {
 
     if (attackBtns) attackBtns.classList.toggle('hidden', !isAttack);
     const defendBtn = _el('btn-defend');
-    if (defendBtn) defendBtn.disabled = isAttack || isCha || friendMode;
+    if (defendBtn) defendBtn.disabled = isAttack || isCha || friendMode || isWait;
 
-    const label = isAttack ? 'YOUR ATTACK' : isCha ? 'CHARISMA'
-      : isFriendFight ? 'FRIEND FIGHTING' : isFriendDied ? 'FRIEND FELL' : 'DEFEND';
+    let label = isAttack ? 'YOUR ATTACK' : isCha ? 'CHARISMA'
+      : isFriendFight ? 'FRIEND FIGHTING' : isFriendDied ? 'FRIEND FELL' : isWait ? "OPPONENT'S MOVE" : 'DEFEND';
+    if (subPhase === 'mob_attack' && inPvp()) {
+      const pa = Game.getPvpView().pendingAttack;
+      const names = { F:'STR', D:'DEX', M:'MAG' };
+      if (pa) label = `DEFEND vs ${names[pa.attackType] ?? pa.attackType}${pa.spellId ? ' + ' + (getItem(pa.spellId)?.name ?? '') : ''}`;
+    }
     if (phaseLabel) phaseLabel.textContent = label;
 
     // Manage right column content
@@ -441,8 +544,8 @@ const Panels = (() => {
     if (!isFriendFight) _el('friend-fighting-ui')?.classList.add('hidden');
     if (!isFriendDied)  _el('friend-defeat-ui')?.classList.add('hidden');
 
-    // Show/hide deploy-friend button
-    if (isAttack) {
+    // Show/hide deploy-friend button (no companions in duels)
+    if (isAttack && !inPvp()) {
       const player = Game.getCurrentPlayer();
       const btn = _el('btn-deploy-friend');
       if (btn) btn.classList.toggle('hidden', !(player?.friendsList?.length > 0));
@@ -502,7 +605,7 @@ const Panels = (() => {
 
   // Rebuild the permanent spell list. enabled=true during player_attack, false otherwise.
   function refreshSpellPanel(enabled) {
-    const player = Game.getCurrentPlayer();
+    const player = combatSelf();
     const list   = _el('spell-list');
     if (!player || !list) return;
     list.innerHTML = '';
@@ -762,17 +865,14 @@ const Panels = (() => {
   // Refresh the player stat block inside the combat panel (hearts + all stats).
   // Call this after any item use or combat step so temp bonuses are visible.
   function refreshCombatPlayerStats() {
-    const player = Game.getCurrentPlayer();
+    const player = combatSelf();
     if (!player) return;
     const infoEl = _el('combat-player-info');
     if (!infoEl) return;
     const heartsEl = infoEl.querySelector('.combat-hearts');
     const tableEl  = infoEl.querySelector('.stats-table');
     if (heartsEl) heartsEl.textContent = `❤ ${player.hearts.current}/${player.hearts.max}`;
-    if (tableEl) tableEl.innerHTML =
-      `<tr><td>STR</td><td>${player.getStat('F')}</td><td>DEX</td><td>${player.getStat('D')}</td></tr>
-       <tr><td>ARM</td><td>${player.getStat('A')}</td><td>MAG</td><td>${player.getStat('M')}</td></tr>
-       <tr><td>CHA</td><td>${player.getStat('C')}</td><td>SPD</td><td>${player.getStat('V')}</td></tr>`;
+    if (tableEl) tableEl.innerHTML = playerStatsTable(player);   // potion/curse effects coloured
   }
 
   // ── Bail picker ───────────────────────────────────────────────────────────
@@ -844,7 +944,8 @@ const Panels = (() => {
   const NON_COMBAT_OBJ_TYPES = new Set(['escape','prevent_escape','fast_travel','choose_category','place_trap']);
 
   function refreshCombatConsumables() {
-    const player = Game.getCurrentPlayer();
+    const player = combatSelf();
+    const pvp = inPvp() ? Game.getPvpView() : null;
     const consEl = _el('combat-consumable-list');
     if (!consEl) return;
     consEl.innerHTML = '';
@@ -854,6 +955,8 @@ const Panels = (() => {
       if (item.slot)    return false; // equipment
       if (item.subtype) return false; // attack/defense spells
       if (NON_COMBAT_IDS.has(id)) return false;
+      // Duels: a Chain stops the opponent escaping (on your move, if they aren't chained yet)
+      if (id === 'chain' && pvp) return pvp.step === 'act' && !pvp.players.find(v => v.id !== player.id)?.chained;
       if (typeof item.effect === 'object' && NON_COMBAT_OBJ_TYPES.has(item.effect?.type)) return false;
       return item.effect || item.statBonus;
     });
@@ -867,7 +970,7 @@ const Panels = (() => {
           <button class="inv-equip-btn">Transmute</button>`;
         div.querySelector('button').addEventListener('click', showTransmutationPicker);
       } else if (id === 'sp_curse') {
-        const alreadyUsed = !!Game.getState().pendingCombat?.curseUsedThisTurn;
+        const alreadyUsed = pvp ? false : !!Game.getState().pendingCombat?.curseUsedThisTurn;
         div.innerHTML = `<span>${label}</span>
           <button class="inv-equip-btn" ${alreadyUsed ? 'disabled' : ''}>Curse</button>`;
         if (!alreadyUsed) div.querySelector('button').addEventListener('click', showCursePicker);

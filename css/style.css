@@ -407,6 +407,22 @@ body {
   white-space: nowrap;
 }
 
+.run-num-input {
+  background: #0d1520;
+  border: 1px solid #2a3a5a;
+  border-radius: 4px;
+  color: #c8d0e0;
+  font-family: inherit;
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  width: 60px;
+}
+
+.run-num-input:focus {
+  outline: none;
+  border-color: #4a7ab0;
+}
+
 .run-name-input {
   background: #0d1520;
   border: 1px solid #2a3a5a;

@@ -171,9 +171,9 @@ const MOBS = (() => {
         [{itemId:'legendary_sword'},{itemId:'royal_crown'},{itemId:'boss_magic_flute'}],
         0), isBoss:true },
 
-    // principessa handled by game.js on death; dragon_blood×10, 100×d6 coins
+    // principessa handled by game.js on death; dragon_blood×10 + 10 healing potions (for the escort), 100×d6 coins
     { ...mob('dragon',       'Dragon',          3, 20,20,20,20,20,20, 12,
-        [{itemId:'dragon_blood', count:10}],
+        [{itemId:'dragon_blood', count:10}, {itemId:'pot_heal', count:10}],
         0, 100), isBoss:true },
 
     // alpha_fang(9F), werewolf_blood×3, laceration×3

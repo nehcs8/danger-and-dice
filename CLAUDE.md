@@ -1,5 +1,15 @@
 # Danger & Dice — Project Guide for Claude
 
+## Python / ML Environment
+
+For any Python ML work (numpy, torch, train.py, etc.) always use the venv from the sibling project:
+```
+/home/simo/Documents/Python/Scopone Scientifico/venv/bin/python
+```
+Never use system `python3` or `pip install` globally.
+
+---
+
 ## Overview
 
 Browser-based D&D-inspired board game. Runs from `index.html` with no server, no install, no dependencies.

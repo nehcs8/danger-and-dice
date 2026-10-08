@@ -54,6 +54,16 @@ const SpectateStats = (() => {
   const lootByZone        = {};   // playerId → { 0, 1, 2, 3 }
   const skillUsage        = {};   // playerId → { F, D, A, M, C, V }
   const consumableUsage   = {};   // playerId → { itemId: count }
+  // Equipment / build history (for run exports)
+  const equipLog          = {};   // playerId → [{ turn, action:'equip'|'unequip', slot, item, enchantment }]
+  const purchases         = {};   // playerId → [{ turn, item, name, price, where }]
+  const sales             = {};   // playerId → { count, coins, byTurn: { turn: count } }
+  const enchantLog        = {};   // playerId → [{ turn, slot, item, enchantment, tier }]
+  const skillLog          = {};   // playerId → [{ turn, stat, newValue }]
+  const guildLevelLog     = {};   // playerId → [{ turn, item, level }]
+  const guildLevelSeen    = {};   // playerId → { itemId: lastLevel }
+  const death             = {};   // playerId → { turn, by }
+  const lastOpponent      = {};   // playerId → mob name of the current/last fight
 
   // ── Initialise ─────────────────────────────────────────────────────────────
   function init(playerList) {
@@ -75,6 +85,78 @@ const SpectateStats = (() => {
       lootByZone[p.id]        = { 0: 0, 1: 0, 2: 0, 3: 0 };
       skillUsage[p.id]        = { F: 0, D: 0, A: 0, M: 0, C: 0, V: 0 };
       consumableUsage[p.id]   = {};
+      equipLog[p.id]          = [];
+      purchases[p.id]         = [];
+      sales[p.id]             = { count: 0, coins: 0, byTurn: {} };
+      enchantLog[p.id]        = [];
+      skillLog[p.id]          = [];
+      guildLevelLog[p.id]     = [];
+      guildLevelSeen[p.id]    = {};
+      death[p.id]             = null;
+      lastOpponent[p.id]      = null;
+    });
+
+    const byName = name => players.find(q => q.name === name);
+    const liveObj = name => Game.getState().players.find(q => q.name === name);
+
+    // Equip / unequip history
+    Game.on('item_equipped', ev => {
+      const p = byName(ev.player); if (!p || !ev.item) return;
+      equipLog[p.id].push({ turn: pturn[p.id], action: 'equip', slot: ev.item.slot, item: ev.item.id,
+                            enchantment: ev.item.enchantment?.id ?? null });
+    });
+    Game.on('item_unequipped', ev => {
+      const p = byName(ev.player); if (!p) return;
+      equipLog[p.id].push({ turn: pturn[p.id], action: 'unequip', slot: ev.slot ?? ev.item?.slot ?? null,
+                            item: ev.item?.id ?? null });
+    });
+
+    // Purchases (shops, guilds, master) and sales
+    Game.on('shop_transaction', ev => {
+      const p = byName(ev.player); if (!p || !ev.item) return;
+      const ph = Game.getState().phase;
+      if (ev.type === 'buy') {
+        const where = ev.item.guild ? `guild:${ev.item.guild}` : (ph === Game.Phase.MASTER ? 'master' : 'shop');
+        purchases[p.id].push({ turn: pturn[p.id], item: ev.item.id, name: ev.item.name, price: ev.item.buyPrice ?? null, where });
+      } else if (ev.type === 'sell') {
+        const sl = sales[p.id];
+        sl.count++;
+        sl.coins += sellPrice(ev.item) ?? 0;
+        sl.byTurn[pturn[p.id]] = (sl.byTurn[pturn[p.id]] ?? 0) + 1;
+      }
+    });
+
+    // Enchantments and master skills
+    Game.on('enchanted', ev => {
+      const p = byName(ev.player); if (!p) return;
+      const item = liveObj(ev.player)?.equipped?.[ev.slot];
+      enchantLog[p.id].push({ turn: pturn[p.id], slot: ev.slot, item: item?.id ?? null,
+                              enchantment: ev.enchantment?.id ?? ev.enchantment ?? null, tier: ev.tier ?? 1 });
+    });
+    Game.on('skill_upgraded', ev => {
+      const p = byName(ev.player); if (!p) return;
+      skillLog[p.id].push({ turn: pturn[p.id], stat: ev.stat, newValue: ev.newValue });
+    });
+
+    // Guild item level-ups (no dedicated event: compare levels after each victory)
+    Game.on('combat_victory', ev => {
+      const p = byName(ev.player); if (!p) return;
+      const obj = liveObj(ev.player); if (!obj) return;
+      for (const [id, lv] of Object.entries(obj.guildItemLevels ?? {})) {
+        const prev = guildLevelSeen[p.id][id] ?? 1;
+        if ((lv.itemLevel ?? 1) > prev) guildLevelLog[p.id].push({ turn: pturn[p.id], item: id, level: lv.itemLevel });
+        guildLevelSeen[p.id][id] = lv.itemLevel ?? 1;
+      }
+    });
+
+    // Deaths
+    Game.on('combat_update', ev => {
+      const p = byName(ev.player); if (!p) return;
+      if (ev.mob?.name) lastOpponent[p.id] = ev.mob.name;
+    });
+    Game.on('player_defeated', ev => {
+      const p = byName(ev.player); if (!p) return;
+      death[p.id] = { turn: pturn[p.id], by: lastOpponent[p.id] };
     });
 
     // Count kills, loot, wealth by zone + milestones
@@ -235,8 +317,27 @@ const SpectateStats = (() => {
 
     players.forEach(p => {
       const playerObj = st.players.find(q => q.name === p.name);
+      const strategy = (p.isBot && playerObj && typeof BotAI !== 'undefined' && BotAI.getStrategy)
+        ? BotAI.getStrategy(playerObj) : (playerObj?.botStrategy ?? null);
+      const finalEquipment = {};
+      if (playerObj) for (const [slot, it] of Object.entries(playerObj.equipped)) {
+        if (!it) continue;
+        finalEquipment[slot] = {
+          id: it.id, name: it.name, tier: it.tier ?? null, statBonus: { ...(it.statBonus ?? {}) },
+          enchantment: it.enchantment?.id ?? null,
+          guildLevel: it.guild ? (playerObj.guildItemLevels?.[it.id]?.itemLevel ?? 1) : null,
+        };
+      }
+      const finalInventory = {};
+      for (const id of (playerObj?.inventory ?? [])) finalInventory[id] = (finalInventory[id] ?? 0) + 1;
+      const effectiveStats = {};
+      if (playerObj) for (const k of STAT_KEYS) effectiveStats[k] = playerObj.getStat(k);
+
       result.players[p.name] = {
         isBot: p.isBot ?? false,
+        strategy,
+        alive: playerObj?.isAlive ?? null,
+        death: death[p.id] ? { ...death[p.id] } : null,
         totalTurns: pturn[p.id] ?? 0,
         kills: kills[p.id] ?? 0,
         killsByZone: { ...(killsByZone[p.id] ?? {}) },
@@ -246,6 +347,16 @@ const SpectateStats = (() => {
         skillUsage: { ...(skillUsage[p.id] ?? {}) },
         consumableUsage: { ...(consumableUsage[p.id] ?? {}) },
         finalStats: playerObj ? { ...playerObj.baseStats } : {},
+        effectiveStats,
+        finalEquipment,
+        finalInventory,
+        guildItemLevels: playerObj ? Object.fromEntries(Object.entries(playerObj.guildItemLevels ?? {}).map(([k, v]) => [k, v.itemLevel])) : {},
+        purchases: (purchases[p.id] ?? []).slice(),
+        sales: sales[p.id] ? { count: sales[p.id].count, coins: sales[p.id].coins, byTurn: { ...sales[p.id].byTurn } } : null,
+        enchantments: (enchantLog[p.id] ?? []).slice(),
+        masterSkills: (skillLog[p.id] ?? []).slice(),
+        guildLevelUps: (guildLevelLog[p.id] ?? []).slice(),
+        equipmentLog: (equipLog[p.id] ?? []).slice(),
         milestones: (milestones[p.id] ?? []).slice(),
         guildLevelSix: (guildLevelSix[p.id] ?? []).slice(),
         series: series[p.id]
