@@ -2,6 +2,22 @@ const Combat = (() => {
   const ATTACK_TYPES = ['F','D','M','C'];
   const DEFENSE_FOR  = { F:'A', D:'V', M:'M', C:'C' };
 
+  // ── Charisma tuning ───────────────────────────────────────────────────────
+  // Roll C + d6 vs mob C (flat): diff ≥ 7 → T3, ≥ 5 → T2, ≥ 3 → T1.
+  // diff 1–2 ("near miss") → +1 C for the rest of the fight (stacks), fight goes on.
+  const CHA_NEAR_MISS_BONUS = 1;
+  // Deceive coins and Gift size scale with the mob's zone tier (0–3).
+  const CHA_ZONE_COIN_MULT  = [1, 2, 3, 4];
+  const CHA_ZONE_GIFT_ITEMS = [1, 1, 2, 2];
+  // Learn (+1 permanent stat): targets C; once C is at the cap, a random defensive stat.
+  const CHA_LEARN_CAP       = 8;
+  const CHA_LEARN_FALLBACK  = ['M','A','V'];
+
+  function charismaMaxTier(diff) {
+    return diff >= 7 ? 3 : diff >= 5 ? 2 : diff >= 3 ? 1 : 0;
+  }
+  function chaZone(mob) { return Math.min(3, Math.max(0, mob.tier ?? 0)); }
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   // Mob attack/defense roll: base (stat − 3) + d6. Base can be negative.
@@ -174,11 +190,17 @@ const Combat = (() => {
     switch (`${family}:${tier}`) {
 
       case 'friendly:1': {
-        const loot = charismaResult.pendingLoot;
-        if (loot.items.length) {
-          const itemId = loot.items[Math.floor(Math.random() * loot.items.length)];
-          player.addItem(itemId);
-          log.push(`${targetName(mob)} gifts ${getItem(itemId)?.name ?? itemId}!`);
+        // Gift: 1 random drop in zones 0–1, 2 different drops in zones 2–3
+        const pool  = [...charismaResult.pendingLoot.items];
+        const count = Math.min(pool.length, CHA_ZONE_GIFT_ITEMS[chaZone(mob)]);
+        if (count > 0) {
+          const given = [];
+          for (let i = 0; i < count; i++) {
+            const itemId = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+            player.addItem(itemId);
+            given.push(getItem(itemId)?.name ?? itemId);
+          }
+          log.push(`${targetName(mob)} gifts ${given.join(' and ')}!`);
         } else {
           log.push(`${targetName(mob)} has nothing to give.`);
         }
@@ -242,29 +264,17 @@ const Combat = (() => {
         return { outcome: 'ongoing' };
       }
 
-      case 'deceive:1': {
-        let coins = Dice.d6() * 3;
-        if (player.hasEquipped('con_artist_hat')) coins *= 2;
-        player.coins += coins;
-        log.push(`${player.name} steals ${coins} coins and flees!`);
-        player.clearFightEffects(); mob.statusEffects = [];
-        return { outcome: 'charisma_end', coinsChanged: true };
-      }
-
-      case 'deceive:2': {
-        let coins = Dice.d6() * 5;
-        if (player.hasEquipped('con_artist_hat')) coins *= 2;
-        player.coins += coins;
-        log.push(`${player.name} steals ${coins} coins and flees!`);
-        player.clearFightEffects(); mob.statusEffects = [];
-        return { outcome: 'charisma_end', coinsChanged: true };
-      }
-
+      case 'deceive:1':
+      case 'deceive:2':
       case 'deceive:3': {
-        let coins = Dice.d6() * 8;
+        // d6 × 3/5/8, multiplied by the zone factor (×1 / ×2 / ×3 / ×4 for tiers 0–3)
+        const zoneMult = CHA_ZONE_COIN_MULT[chaZone(mob)];
+        let coins = Dice.d6() * [0, 3, 5, 8][tier] * zoneMult;
         if (player.hasEquipped('con_artist_hat')) coins *= 2;
         player.coins += coins;
-        log.push(`${player.name} pulls off a grand heist — steals ${coins} coins and flees!`);
+        log.push(tier === 3
+          ? `${player.name} pulls off a grand heist — steals ${coins} coins and flees!`
+          : `${player.name} steals ${coins} coins and flees!`);
         player.clearFightEffects(); mob.statusEffects = [];
         return { outcome: 'charisma_end', coinsChanged: true };
       }
@@ -298,7 +308,9 @@ const Combat = (() => {
           player.clearFightEffects(); mob.statusEffects = [];
           return { outcome: 'charisma_end' };
         }
-        const upgradeable = ['F','D','A','M','C','V'].filter(s => player.baseStats[s] < 8);
+        // Learn: +1 C; if C is already at the cap, +1 to a random defensive stat (M/A/V)
+        const fallback = CHA_LEARN_FALLBACK.filter(s => player.baseStats[s] < CHA_LEARN_CAP);
+        const upgradeable = player.baseStats.C < CHA_LEARN_CAP ? ['C'] : fallback;
         if (upgradeable.length) {
           const stat = upgradeable[Math.floor(Math.random() * upgradeable.length)];
           player.baseStats[stat]++;
@@ -470,7 +482,14 @@ const Combat = (() => {
 
       } else if (action.type === 'bard') {
         const charismaResult = resolveCharismaRoll(player, mob, newLog);
-        if (charismaResult.diff >= 1) {
+        const diff = charismaResult.diff;
+        player.consumeTempBonus('C'); // potions / alcohol / blessing last one roll, like attacks
+        // C XP per roll, same as an attack: success +1, fail +2 (shares the 10-per-fight cap)
+        if ((player.combatXpHits ?? 0) < 10) {
+          player.combatXpHits = (player.combatXpHits ?? 0) + 1;
+          player.gainXP('C', diff >= 3 ? 1 : 2);
+        }
+        if (diff >= 1) {
           if (player.hasEquipped('cursed_rattle')) {
             mob.hearts.current--;
             newLog.push(`Cursed Rattle: ${targetName(mob)} takes 1 damage! ❤ ${mob.hearts.current}/${mob.hearts.max}`);
@@ -483,10 +502,19 @@ const Combat = (() => {
               return { outcome: 'victory', loot, newLog };
             }
           }
-          fightLog.push(...newLog);
-          return { outcome: 'charisma_pending', charismaResult, newLog };
+          if (diff >= 3) {
+            fightLog.push(...newLog);
+            return { outcome: 'charisma_pending', charismaResult, newLog };
+          }
+          // Near miss (diff 1–2): the crowd warms up — +1 C until the fight ends (stacks)
+          player.statusEffects.push({ type: 'bonus', stat: 'C', value: CHA_NEAR_MISS_BONUS,
+                                      turnsLeft: 9999, source: 'near_miss' });
+          const total = player.statusEffects
+            .filter(e => e.source === 'near_miss').reduce((s, e) => s + e.value, 0);
+          newLog.push({ text: `So close! ${targetName(mob)} is warming up to you — +${CHA_NEAR_MISS_BONUS} C for this fight (total +${total})`, type: 'bard' });
+        } else {
+          newLog.push(`Charisma failed — mob ignores you`);
         }
-        newLog.push(`Charisma failed — mob ignores you`);
       }
     }
 
@@ -709,5 +737,7 @@ const Combat = (() => {
   }
 
   return { resolve, initFight, takePlayerAttack, takeMobAttack, rollMobAttack: mobHighestAttack,
-           resolveCharismaRoll, applyCharismaOutcome, questDescription, resolveFriendRound, resolveLoot };
+           resolveCharismaRoll, applyCharismaOutcome, questDescription, resolveFriendRound, resolveLoot,
+           charismaMaxTier,
+           CHA_ZONE_COIN_MULT, CHA_ZONE_GIFT_ITEMS, CHA_LEARN_CAP };
 })();

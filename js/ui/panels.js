@@ -43,7 +43,7 @@ const Panels = (() => {
     const sb = item.statBonus;
     if (!sb) return '';
     return Object.entries(sb)
-      .map(([stat, val]) => (val >= 0 ? `+${val}` : `\u2212${Math.abs(val)}`) + stat)
+      .map(([stat, val]) => (val >= 0 ? `+${val}` : `−${Math.abs(val)}`) + stat)
       .join(' ');
   }
 
@@ -53,10 +53,10 @@ const Panels = (() => {
       if (!item.effect) return mv;
       const e = item.effect;
       if (e.type === 'fire')      return `${mv} · burn ${e.n} turn${e.n > 1 ? 's' : ''}`;
-      if (e.type === 'ice')       return `${mv} · \u2212${e.n} SPD`;
+      if (e.type === 'ice')       return `${mv} · −${e.n} SPD`;
       if (e.type === 'lightning') return `${mv} · stun 1 turn`;
-      if (e.type === 'explosion') return `${mv} · \u2212${e.n} ARM`;
-      if (e.type === 'blood')     return `${mv} · +1\u2764 on kill`;
+      if (e.type === 'explosion') return `${mv} · −${e.n} ARM`;
+      if (e.type === 'blood')     return `${mv} · +1❤ on kill`;
       return mv;
     }
     if (item.subtype === 'defense') return `+${item.armorValue} magic defense`;
@@ -136,7 +136,6 @@ const Panels = (() => {
     Game.on('combat_update', data => {
       const logEl = _el('combat-log');
       if (!logEl) return;
-      if (data.pvp) { pvpCombatUpdate(data); return; }
       const emitColor = data.logType === 'curse' ? '#c470e0'
                       : data.logType === 'bard'  ? '#ffd080'
                       : null;
@@ -153,7 +152,7 @@ const Panels = (() => {
           d.textContent = entry;
           if (emitColor) d.style.color = emitColor;
         }
-        frag.insertBefore(d, frag.firstChild);   // newest line first, also within a batch
+        frag.appendChild(d);
       });
       logEl.insertBefore(frag, logEl.firstChild);
 
@@ -258,101 +257,6 @@ const Panels = (() => {
   }
 
   // ── Combat ────────────────────────────────────────────────────────────────
-  // Whose side the combat panel shows. Normally the current player; in a PvP duel the human
-  // participant (the one the fight waits on if both are human), so you can defend out of turn.
-  function inPvp() { return Game.getState().phase === Game.Phase.PVP_COMBAT && !!Game.getPvpView?.(); }
-  function combatSelf() {
-    if (!inPvp()) return Game.getCurrentPlayer();
-    const view = Game.getPvpView(), st = Game.getState();
-    const parts = view.players.map(v => st.players.find(p => p.id === v.id));
-    return parts.find(p => !p.isBot && view.waitingFor.includes(p.id))
-        ?? parts.find(p => !p.isBot)
-        ?? Game.getCurrentPlayer();
-  }
-  function combatEnemy() {
-    if (!inPvp()) return null;
-    const me = combatSelf(), st = Game.getState();
-    const other = Game.getPvpView().players.find(v => v.id !== me.id);
-    return st.players.find(p => p.id === other.id);
-  }
-
-  // A player's stat cell: coloured when potions, blood, curses or blessings change it.
-  // Player roll formula: stat + d6, so range is [eff+1, eff+6].
-  function playerStatCell(p, k) {
-    const eff = p.getStat(k);
-    let fx = (p.tempBonuses?.[k] ?? 0) + (p.priestBuff ?? 0);
-    for (const e of (p.statusEffects ?? [])) if (e.stat === k) fx += e.value ?? 0;
-    const numStr = fx > 0 ? `<span style="color:#9eff9e;font-weight:bold">${eff}</span>`
-                 : fx < 0 ? `<span style="color:#ff9e9e;font-weight:bold">${eff}</span>` : `${eff}`;
-    return inPvp() ? `${numStr} <span style="color:#888;font-size:0.78em">[${eff + 1}~${eff + 6}]</span>` : numStr;
-  }
-  function playerStatsTable(p) {
-    const c = k => playerStatCell(p, k);
-    return `<tr><td>STR</td><td>${c('F')}</td><td>DEX</td><td>${c('D')}</td></tr>
-       <tr><td>ARM</td><td>${c('A')}</td><td>MAG</td><td>${c('M')}</td></tr>
-       <tr><td>CHA</td><td>${c('C')}</td><td>SPD</td><td>${c('V')}</td></tr>`;
-  }
-  // Map the duel state to the panel's sub-phases from *your* point of view.
-  function pvpSubPhase() {
-    const view = Game.getPvpView(), me = combatSelf();
-    if (!view.waitingFor.includes(me.id)) return 'pvp_wait';
-    return view.step === 'defend' ? 'mob_attack' : 'player_attack';
-  }
-
-  function showPvpCombat() {
-    showModal('modal-combat');
-    const me = combatSelf(), foe = combatEnemy(), view = Game.getPvpView();
-    renderPvpSides(me, foe, view);
-    const logEl = _el('combat-log');
-    logEl.innerHTML = '';
-    const frag = document.createDocumentFragment();
-    view.log.forEach(line => { const d = document.createElement('div'); d.textContent = line; frag.insertBefore(d, frag.firstChild); });
-    logEl.insertBefore(frag, logEl.firstChild);
-    _el('charisma-sub-swap')?.classList.add('hidden');
-    _el('charisma-sub-stat')?.classList.add('hidden');
-    _el('charisma-sub-trade')?.classList.add('hidden');
-    _el('friend-picker')?.classList.add('hidden');
-    _el('friend-fighting-ui')?.classList.add('hidden');
-    _el('friend-defeat-ui')?.classList.add('hidden');
-    pvpRefreshControls();
-  }
-
-  function renderPvpSides(me, foe, view) {
-    const tag = (p, v) => [v.chained ? '🔗 chained' : null, v.smoke ? '💨 smoke' : null, p.hasPrincess ? '👑 princess' : null].filter(Boolean).join(' · ');
-    const vOf = p => view.players.find(v => v.id === p.id);
-    _el('combat-enemy-info').innerHTML =
-      `<strong>${foe.name}</strong>${foe.isBot ? ' <span style="color:#888">(bot)</span>' : ''}
-       <div class="combat-hearts">❤ ${foe.hearts.current}/${foe.hearts.max}</div>
-       <div style="font-size:0.78em;color:#c8b8a0">${tag(foe, vOf(foe))}</div>
-       <table class="stats-table">${playerStatsTable(foe)}</table>`;
-    _el('combat-player-info').innerHTML =
-      `<strong>${me.name}</strong>
-       <div class="combat-hearts">❤ ${me.hearts.current}/${me.hearts.max}</div>
-       <div style="font-size:0.78em;color:#c8b8a0">${tag(me, vOf(me))}</div>
-       <table class="stats-table">${playerStatsTable(me)}</table>`;
-  }
-
-  function pvpRefreshControls() {
-    const me = combatSelf(), view = Game.getPvpView();
-    setCombatPhase(pvpSubPhase());
-    refreshCombatConsumables();
-    const magicBtn = document.querySelector('[data-type="M"]');
-    if (magicBtn) magicBtn.disabled = !me.canAttackMagic();
-    const chained = !!view.players.find(v => v.id === me.id)?.chained;
-    _el('btn-bail').disabled = chained || !me.canEscape();
-    _el('btn-run').disabled  = chained;
-  }
-
-  function pvpCombatUpdate(data) {
-    const logEl = _el('combat-log');
-    const frag = document.createDocumentFragment();
-    (data.newLog ?? []).forEach(line => { const d = document.createElement('div'); d.textContent = line; frag.insertBefore(d, frag.firstChild); });
-    logEl.insertBefore(frag, logEl.firstChild);
-    if (!inPvp()) return;                       // fight over — next state_change closes the panel
-    renderPvpSides(combatSelf(), combatEnemy(), Game.getPvpView());
-    pvpRefreshControls();
-  }
-
   // Compute effective mob stat (base + active status effects).
   function getMobEffectiveStat(mob, stat) {
     let v = mob.stats[stat] ?? 0;
@@ -386,7 +290,6 @@ const Panels = (() => {
   }
 
   function showCombat(data) {
-    if (inPvp()) return showPvpCombat();
     showModal('modal-combat');
     const player = Game.getCurrentPlayer();
     const mob    = data.mob ?? data.defender;
@@ -429,16 +332,14 @@ const Panels = (() => {
       } else {
         d.textContent = entry;
       }
-      initFrag.insertBefore(d, initFrag.firstChild);   // newest line first
+      initFrag.appendChild(d);
     });
     logEl.insertBefore(initFrag, logEl.firstChild);
 
     setCombatPhase(data.combatSubPhase ?? 'player_attack');
 
     // Reset picker state for new fight
-    _el('charisma-sub-swap')?.classList.add('hidden');
-    _el('charisma-sub-stat')?.classList.add('hidden');
-    _el('charisma-sub-trade')?.classList.add('hidden');
+    _closeChaSub();
     _el('friend-picker')?.classList.add('hidden');
     _el('friend-fighting-ui')?.classList.add('hidden');
     _el('friend-defeat-ui')?.classList.add('hidden');
@@ -468,7 +369,7 @@ const Panels = (() => {
     });
 
     _el('btn-bail').addEventListener('click', () => {
-      const player  = combatSelf();
+      const player  = Game.getCurrentPlayer();
       const hasShoes = player.hasEquipped('stealth_shoes');
       const hasRope  = player.hasItem('rope');
       const hasInvis = player.hasItem('sp_invisibility');
@@ -515,7 +416,6 @@ const Panels = (() => {
   }
 
   function setCombatPhase(subPhase) {
-    const isWait       = subPhase === 'pvp_wait';
     const isAttack     = subPhase === 'player_attack';
     const isCha        = subPhase === 'charisma_pick';
     const isFriendFight = subPhase === 'friend_fighting';
@@ -528,15 +428,10 @@ const Panels = (() => {
 
     if (attackBtns) attackBtns.classList.toggle('hidden', !isAttack);
     const defendBtn = _el('btn-defend');
-    if (defendBtn) defendBtn.disabled = isAttack || isCha || friendMode || isWait;
+    if (defendBtn) defendBtn.disabled = isAttack || isCha || friendMode;
 
-    let label = isAttack ? 'YOUR ATTACK' : isCha ? 'CHARISMA'
-      : isFriendFight ? 'FRIEND FIGHTING' : isFriendDied ? 'FRIEND FELL' : isWait ? "OPPONENT'S MOVE" : 'DEFEND';
-    if (subPhase === 'mob_attack' && inPvp()) {
-      const pa = Game.getPvpView().pendingAttack;
-      const names = { F:'STR', D:'DEX', M:'MAG' };
-      if (pa) label = `DEFEND vs ${names[pa.attackType] ?? pa.attackType}${pa.spellId ? ' + ' + (getItem(pa.spellId)?.name ?? '') : ''}`;
-    }
+    const label = isAttack ? 'YOUR ATTACK' : isCha ? 'CHARISMA'
+      : isFriendFight ? 'FRIEND FIGHTING' : isFriendDied ? 'FRIEND FELL' : 'DEFEND';
     if (phaseLabel) phaseLabel.textContent = label;
 
     // Manage right column content
@@ -544,8 +439,8 @@ const Panels = (() => {
     if (!isFriendFight) _el('friend-fighting-ui')?.classList.add('hidden');
     if (!isFriendDied)  _el('friend-defeat-ui')?.classList.add('hidden');
 
-    // Show/hide deploy-friend button (no companions in duels)
-    if (isAttack && !inPvp()) {
+    // Show/hide deploy-friend button
+    if (isAttack) {
       const player = Game.getCurrentPlayer();
       const btn = _el('btn-deploy-friend');
       if (btn) btn.classList.toggle('hidden', !(player?.friendsList?.length > 0));
@@ -605,7 +500,7 @@ const Panels = (() => {
 
   // Rebuild the permanent spell list. enabled=true during player_attack, false otherwise.
   function refreshSpellPanel(enabled) {
-    const player = combatSelf();
+    const player = Game.getCurrentPlayer();
     const list   = _el('spell-list');
     if (!player || !list) return;
     list.innerHTML = '';
@@ -636,15 +531,68 @@ const Panels = (() => {
     showExtraPanel('spell-panel');
   }
 
+  // ── Charisma picker ───────────────────────────────────────────────────────
+  const CHA_STAT_LABELS = { F:'STR', D:'DEX', A:'ARM', M:'MAG', C:'CHA', V:'SPD' };
+  const CHA_SUB_IDS     = ['charisma-sub-swap', 'charisma-sub-stat', 'charisma-sub-trade'];
+
+  // Short display name for a charisma action (used by the Repeat button).
+  function _chaActionLabel(a) {
+    const L = CHA_STAT_LABELS;
+    switch (`${a.family}:${a.tier}`) {
+      case 'friendly:1': return 'Gift';
+      case 'friendly:2': return 'Heal';
+      case 'friendly:3': return 'Befriend';
+      case 'mock:1':     return `Swap ${L[a.stat1]}↔${L[a.stat2]}`;
+      case 'mock:2':     return `Malus ${L[a.stat]}`;
+      case 'mock:3':     return `Bonus ${L[a.stat]}`;
+      case 'deceive:1':  return 'Steal';
+      case 'deceive:2':  return 'Steal More';
+      case 'deceive:3':  return 'Grand Heist';
+      case 'respect:2':  return 'Quest';
+      case 'respect:3':  return 'Learn';
+      case 'kill:1':     return 'Execute';
+      default:           return `${a.family} ${a.tier}`;
+    }
+  }
+
+  // The last option is repeatable if this roll unlocks its tier.
+  // Trade is never repeatable (the items on offer differ per mob).
+  function _chaCanRepeat(a, maxTier, player) {
+    if (!a || !a.family) return false;
+    if (a.family === 'respect' && a.tier === 1) return false;
+    if (a.family === 'kill') return maxTier >= 3 && !!player?.hasEquipped('cursed_rattle');
+    return a.tier <= maxTier;
+  }
+
+  // Submit a charisma outcome and remember it (per player) for the Repeat button.
+  function _submitCha(action) {
+    const player = Game.getCurrentPlayer();
+    if (player && !action.retreat) player.lastCharismaAction = { ...action };
+    _closeChaSub();
+    Game.submitAction({ type:'charisma_outcome', ...action });
+  }
+
+  // Sub-pickers replace the option list in place (no scrolling to reach them).
+  function _openChaSub(id) {
+    _el('charisma-options')?.classList.add('hidden');
+    CHA_SUB_IDS.forEach(s => _el(s)?.classList.toggle('hidden', s !== id));
+    const extra = _el('combat-extra');
+    if (extra) extra.scrollTop = 0;
+  }
+
+  function _closeChaSub() {
+    CHA_SUB_IDS.forEach(s => _el(s)?.classList.add('hidden'));
+    _el('charisma-options')?.classList.remove('hidden');
+  }
+
   function showCharismaPicker(charismaResult) {
     const { diff, playerRoll, mobC, pendingLoot } = charismaResult;
-    const picker = _el('charisma-picker');
     const player = Game.getCurrentPlayer();
 
-    _el('charisma-sub-swap').classList.add('hidden');
-    _el('charisma-sub-stat').classList.add('hidden');
-    _el('charisma-sub-trade').classList.add('hidden');
+    _closeChaSub();
     showExtraPanel('charisma-picker');
+    const extra = _el('combat-extra');
+    if (extra) extra.scrollTop = 0;
 
     const sign = diff >= 0 ? '+' : '';
     _el('charisma-roll-result').textContent =
@@ -653,15 +601,25 @@ const Panels = (() => {
     const optionsEl = _el('charisma-options');
     optionsEl.innerHTML = '';
 
-    if (diff >= 1) {
-      const btn = _chaBtn('← Retreat', '#555', () => {
-        Game.submitAction({ type: 'charisma_outcome', retreat: true });
-      });
+    const maxTier = diff >= 7 ? 3 : diff >= 5 ? 2 : diff >= 3 ? 1 : 0;
+
+    // Repeat the previous choice (only when this roll unlocks it)
+    const last = player?.lastCharismaAction;
+    if (maxTier >= 1 && _chaCanRepeat(last, maxTier, player)) {
+      const btn = _chaBtn(`↻ Repeat: ${_chaActionLabel(last)}`, '#7a5a00', () => _submitCha(last));
+      btn.style.fontWeight   = 'bold';
+      btn.style.padding      = '5px';
       btn.style.marginBottom = '5px';
       optionsEl.appendChild(btn);
     }
 
-    if (diff < 3) {
+    if (diff >= 1) {
+      const btn = _chaBtn('← Retreat', '#555', () => _submitCha({ retreat: true }));
+      btn.style.marginBottom = '5px';
+      optionsEl.appendChild(btn);
+    }
+
+    if (maxTier < 1) {
       if (diff < 1) {
         const msg = document.createElement('div');
         msg.style.cssText = 'color:#666;font-size:0.8em;margin-top:4px';
@@ -671,33 +629,41 @@ const Panels = (() => {
       return;
     }
 
-    const maxTier = diff >= 7 ? 3 : diff >= 5 ? 2 : 1;
     const hasRattle = player?.hasEquipped('cursed_rattle');
+    const zone      = Math.min(3, Math.max(0, _chaMob()?.tier ?? 0));
+    const zMult     = Combat.CHA_ZONE_COIN_MULT[zone];
+    const hatMult   = player?.hasEquipped('con_artist_hat') ? 2 : 1;
+    const coinDesc  = base => {
+      const m = base * zMult * hatMult;
+      return `d6×${m} coins (${m}–${6 * m})${zMult > 1 ? `, zone ×${zMult}` : ''}, end encounter`;
+    };
+    const giftN     = Combat.CHA_ZONE_GIFT_ITEMS[zone];
+    const learnStat = (player?.baseStats?.C ?? 0) < Combat.CHA_LEARN_CAP ? '+1 C' : '+1 M/A/V (C maxed)';
 
     const families = [
       { key:'friendly', label:'Friendly', color:'#3a8a3a', options:[
-        { tier:1, label:'Gift',     desc:'Random drop from mob, end encounter' },
+        { tier:1, label:'Gift',     desc:`${giftN === 1 ? '1 random drop' : `${giftN} random drops`} from mob, end encounter` },
         { tier:2, label:'Heal',     desc:'+1 heart, end encounter' },
         { tier:3, label:'Befriend', desc:'Mob joins your friends list' },
       ]},
       { key:'mock', label:'Mock', color:'#8a3a8a', options:[
         { tier:1, label:'Swap Stats', desc:'Swap two mob stats for d6 turns',
-          click: () => _chaSwapPicker(picker) },
+          click: () => _chaSwapPicker() },
         { tier:2, label:'Malus', desc:'Apply d6 stat malus to mob for d6 turns',
-          click: () => _chaStatPicker('malus', picker) },
+          click: () => _chaStatPicker('malus') },
         { tier:3, label:'Bonus', desc:'Gain d6 stat bonus for d6 turns',
-          click: () => _chaStatPicker('bonus', picker) },
+          click: () => _chaStatPicker('bonus') },
       ]},
       { key:'deceive', label:'Deceive', color:'#8a5a00', options:[
-        { tier:1, label:'Steal',       desc:'d6×3 coins, end encounter' },
-        { tier:2, label:'Steal More',  desc:'d6×5 coins, end encounter' },
-        { tier:3, label:'Grand Heist', desc:'d6×8 coins, end encounter' },
+        { tier:1, label:'Steal',       desc:coinDesc(3) },
+        { tier:2, label:'Steal More',  desc:coinDesc(5) },
+        { tier:3, label:'Grand Heist', desc:coinDesc(8) },
       ]},
       { key:'respect', label:'Respect', color:'#006a8a', options:[
         { tier:1, label:'Trade', desc:'Exchange items with the mob, end encounter',
-          click: () => _chaTradePicker(picker, pendingLoot) },
+          click: () => _chaTradePicker(pendingLoot) },
         { tier:2, label:'Quest', desc:'Receive a quest, end encounter' },
-        { tier:3, label:'Learn', desc:'+1 random stat (max 8), end encounter' },
+        { tier:3, label:'Learn', desc:`${learnStat} permanently (${player?.dialogueSkillsGained ?? 0}/4 used), end encounter` },
       ]},
       ...(hasRattle && maxTier >= 3 ? [{ key:'kill', label:'Kill (Rattle)', color:'#8a1a1a', options:[
         { tier:1, label:'Execute', desc:'Instantly kill the enemy' },
@@ -722,11 +688,8 @@ const Panels = (() => {
         btn.innerHTML =
           `<strong>${opt.label}</strong> <span style="color:#888">${opt.desc}</span>`;
         btn.addEventListener('click', () => {
-          if (opt.click) {
-            opt.click();
-          } else {
-            Game.submitAction({ type:'charisma_outcome', family:fam.key, tier:opt.tier });
-          }
+          if (opt.click) opt.click();
+          else _submitCha({ family:fam.key, tier:opt.tier });
         });
         section.appendChild(btn);
       });
@@ -745,72 +708,64 @@ const Panels = (() => {
     return btn;
   }
 
-  function _chaSwapPicker(charismaPicker) {
-    const stats  = ['F','D','A','M','C','V'];
-    const labels = { F:'STR', D:'DEX', A:'ARM', M:'MAG', C:'CHA', V:'SPD' };
-    const sub    = _el('charisma-sub-swap');
-    const list   = _el('charisma-swap-list');
-    sub.classList.remove('hidden');
+  // Stat button showing the current value, e.g. "STR 12".
+  function _chaStatBtn(stat, value, onClick) {
+    const btn = document.createElement('button');
+    btn.innerHTML = `${CHA_STAT_LABELS[stat]} <span style="color:#9ab">${value}</span>`;
+    btn.style.cssText =
+      'padding:6px 3px;background:#2a3a5a;color:#fff;border:1px solid #7af;' +
+      'border-radius:3px;cursor:pointer;font-size:0.85em';
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function _chaMob() { return Game.getState().pendingCombat?.mob ?? null; }
+
+  function _chaSwapPicker() {
+    const stats = ['F','D','A','M','C','V'];
+    const list  = _el('charisma-swap-list');
+    const mob   = _chaMob();
+    const val   = s => mob ? getMobEffectiveStat(mob, s) : '';
+    _openChaSub('charisma-sub-swap');
     let firstStat = null;
 
     const render = (exclude) => {
       list.innerHTML = '';
       _el('charisma-swap-title').textContent =
-        exclude ? `Swap ${labels[exclude]} with:` : 'Swap which mob stat first?';
+        exclude ? `Swap mob ${CHA_STAT_LABELS[exclude]} with:` : 'Swap which mob stat first?';
       stats.filter(s => s !== exclude).forEach(s => {
-        const btn = document.createElement('button');
-        btn.textContent = labels[s];
-        btn.style.cssText =
-          'padding:3px;background:#2a3a5a;color:#fff;border:1px solid #7af;' +
-          'border-radius:3px;cursor:pointer;font-size:0.8em';
-        btn.addEventListener('click', () => {
+        list.appendChild(_chaStatBtn(s, val(s), () => {
           if (!firstStat) { firstStat = s; render(s); }
-          else {
-            sub.classList.add('hidden');
-            Game.submitAction({ type:'charisma_outcome', family:'mock', tier:1,
-                                stat1:firstStat, stat2:s });
-          }
-        });
-        list.appendChild(btn);
+          else _submitCha({ family:'mock', tier:1, stat1:firstStat, stat2:s });
+        }));
       });
     };
     render(null);
 
-    _el('btn-charisma-swap-cancel').onclick = () => {
-      sub.classList.add('hidden'); firstStat = null;
-    };
+    _el('btn-charisma-swap-cancel').onclick = () => { firstStat = null; _closeChaSub(); };
   }
 
-  function _chaStatPicker(mode, charismaPicker) {
+  function _chaStatPicker(mode) {
     const stats  = ['F','D','A','M','C','V'];
-    const labels = { F:'STR', D:'DEX', A:'ARM', M:'MAG', C:'CHA', V:'SPD' };
-    const sub    = _el('charisma-sub-stat');
     const list   = _el('charisma-stat-list');
-    sub.classList.remove('hidden');
+    const mob    = _chaMob();
+    const player = Game.getCurrentPlayer();
+    _openChaSub('charisma-sub-stat');
     _el('charisma-stat-title').textContent =
-      mode === 'malus' ? 'Apply malus to which mob stat?' : 'Gain bonus to which stat?';
+      mode === 'malus' ? 'Apply −d6 malus to which mob stat?' : 'Gain +d6 bonus to which of your stats?';
     const tier = mode === 'malus' ? 2 : 3;
     list.innerHTML = '';
     stats.forEach(s => {
-      const btn = document.createElement('button');
-      btn.textContent = labels[s];
-      btn.style.cssText =
-        'padding:3px;background:#2a3a5a;color:#fff;border:1px solid #7af;' +
-        'border-radius:3px;cursor:pointer;font-size:0.8em';
-      btn.addEventListener('click', () => {
-        sub.classList.add('hidden');
-        Game.submitAction({ type:'charisma_outcome', family:'mock', tier, stat:s });
-      });
-      list.appendChild(btn);
+      const v = mode === 'malus' ? (mob ? getMobEffectiveStat(mob, s) : '') : player.getStat(s);
+      list.appendChild(_chaStatBtn(s, v, () => _submitCha({ family:'mock', tier, stat:s })));
     });
-    _el('btn-charisma-stat-cancel').onclick = () => sub.classList.add('hidden');
+    _el('btn-charisma-stat-cancel').onclick = _closeChaSub;
   }
 
-  function _chaTradePicker(charismaPicker, pendingLoot) {
-    const sub        = _el('charisma-sub-trade');
+  function _chaTradePicker(pendingLoot) {
     const mobListEl  = _el('charisma-trade-mob-list');
     const plrListEl  = _el('charisma-trade-player-list');
-    sub.classList.remove('hidden');
+    _openChaSub('charisma-sub-trade');
     mobListEl.innerHTML = '';
     plrListEl.innerHTML = '';
 
@@ -854,25 +809,25 @@ const Panels = (() => {
       makeTradeBtn('(nothing)', plrListEl, () => { selPlr = null; });
     }
 
-    _el('btn-charisma-trade-confirm').onclick = () => {
-      sub.classList.add('hidden');
-      Game.submitAction({ type:'charisma_outcome', family:'respect', tier:1,
-                          mobItemId:selMob, playerItemId:selPlr });
-    };
-    _el('btn-charisma-trade-cancel').onclick = () => sub.classList.add('hidden');
+    _el('btn-charisma-trade-confirm').onclick = () =>
+      _submitCha({ family:'respect', tier:1, mobItemId:selMob, playerItemId:selPlr });
+    _el('btn-charisma-trade-cancel').onclick = _closeChaSub;
   }
 
   // Refresh the player stat block inside the combat panel (hearts + all stats).
   // Call this after any item use or combat step so temp bonuses are visible.
   function refreshCombatPlayerStats() {
-    const player = combatSelf();
+    const player = Game.getCurrentPlayer();
     if (!player) return;
     const infoEl = _el('combat-player-info');
     if (!infoEl) return;
     const heartsEl = infoEl.querySelector('.combat-hearts');
     const tableEl  = infoEl.querySelector('.stats-table');
     if (heartsEl) heartsEl.textContent = `❤ ${player.hearts.current}/${player.hearts.max}`;
-    if (tableEl) tableEl.innerHTML = playerStatsTable(player);   // potion/curse effects coloured
+    if (tableEl) tableEl.innerHTML =
+      `<tr><td>STR</td><td>${player.getStat('F')}</td><td>DEX</td><td>${player.getStat('D')}</td></tr>
+       <tr><td>ARM</td><td>${player.getStat('A')}</td><td>MAG</td><td>${player.getStat('M')}</td></tr>
+       <tr><td>CHA</td><td>${player.getStat('C')}</td><td>SPD</td><td>${player.getStat('V')}</td></tr>`;
   }
 
   // ── Bail picker ───────────────────────────────────────────────────────────
@@ -944,8 +899,7 @@ const Panels = (() => {
   const NON_COMBAT_OBJ_TYPES = new Set(['escape','prevent_escape','fast_travel','choose_category','place_trap']);
 
   function refreshCombatConsumables() {
-    const player = combatSelf();
-    const pvp = inPvp() ? Game.getPvpView() : null;
+    const player = Game.getCurrentPlayer();
     const consEl = _el('combat-consumable-list');
     if (!consEl) return;
     consEl.innerHTML = '';
@@ -955,8 +909,6 @@ const Panels = (() => {
       if (item.slot)    return false; // equipment
       if (item.subtype) return false; // attack/defense spells
       if (NON_COMBAT_IDS.has(id)) return false;
-      // Duels: a Chain stops the opponent escaping (on your move, if they aren't chained yet)
-      if (id === 'chain' && pvp) return pvp.step === 'act' && !pvp.players.find(v => v.id !== player.id)?.chained;
       if (typeof item.effect === 'object' && NON_COMBAT_OBJ_TYPES.has(item.effect?.type)) return false;
       return item.effect || item.statBonus;
     });
@@ -970,7 +922,7 @@ const Panels = (() => {
           <button class="inv-equip-btn">Transmute</button>`;
         div.querySelector('button').addEventListener('click', showTransmutationPicker);
       } else if (id === 'sp_curse') {
-        const alreadyUsed = pvp ? false : !!Game.getState().pendingCombat?.curseUsedThisTurn;
+        const alreadyUsed = !!Game.getState().pendingCombat?.curseUsedThisTurn;
         div.innerHTML = `<span>${label}</span>
           <button class="inv-equip-btn" ${alreadyUsed ? 'disabled' : ''}>Curse</button>`;
         if (!alreadyUsed) div.querySelector('button').addEventListener('click', showCursePicker);
@@ -1328,10 +1280,10 @@ const Panels = (() => {
           const row = document.createElement('div');
           row.className = 'guild-mastery-row';
           row.innerHTML =
-            `<span class="milestone-turn">Turn\u00a0${r.turn}</span>` +
+            `<span class="milestone-turn">Turn ${r.turn}</span>` +
             `<span class="guild-mastery-name">${r.name}</span>` +
             `<span class="guild-mastery-item">${r.itemName}</span>` +
-            `<span class="guild-mastery-stat">${r.stat}\u00a0=\u00a06</span>`;
+            `<span class="guild-mastery-stat">${r.stat} = 6</span>`;
           list.appendChild(row);
         });
         guildDiv.appendChild(list);

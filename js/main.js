@@ -226,11 +226,18 @@
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       e.preventDefault();
-      const lootBtn = $('btn-loot-confirm');
-      if (lootBtn && !lootBtn.closest('.hidden') && lootBtn.offsetParent !== null) {
-        lootBtn.click();
-        return;
+
+      // First check if loot confirmation popup is visible
+      const lootModal = $('modal-loot');
+      if (lootModal && !lootModal.classList.contains('hidden')) {
+        const lootBtn = $('btn-loot-confirm');
+        if (lootBtn) {
+          lootBtn.click();
+          return;
+        }
       }
+
+      // Otherwise, handle roll button
       doRoll();
     });
 
