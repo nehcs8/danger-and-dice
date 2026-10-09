@@ -45,12 +45,12 @@ Danger and Dice/
         │                   #   Full stat/equip/XP API.
         ├── movement.js     # Movement IIFE: BFS getReachable(), pathTo(), rollCap()
         ├── combat.js       # Combat IIFE: step-based API — initFight(), takePlayerAttack(),
-        │                   #   takeMobAttack(), rollMobAttack(). Legacy resolve() kept for PVP.
+        │                   #   takeMobAttack(), rollMobAttack(). No legacy resolve().
         ├── king_battle.js  # KingBattle IIFE: tactical 5v5 in the King's Hall.
         │                   #   20×30 grid, 40 named sectors, obstacles, LoS table, sector control,
         │                   #   planning phase, AI move, executeRound(). Standalone sandbox mode.
         ├── game.js         # Game IIFE: state machine, all phase handlers, event bus (on/emit)
-        ├── bot.js          # BotAI IIFE: chooseCombatAction(), takeTurn()
+        ├── bot_v2.js       # BotAI IIFE: rule-based speedrun bot (Monte Carlo fight model, potential field nav)
     └── ui/
         ├── renderer.js     # Canvas renderer (16px tiles, 51×38). Draws grid, players, princess.
         │                   #   MINIBOSS tiles colored by tier (blue/green/yellow/red for 0–3).
@@ -67,7 +67,7 @@ Danger and Dice/
 ```
 
 **Script load order in index.html (must be preserved):**
-`dice → items → mobs → map → player → movement → combat → king_battle → game → bot → renderer → hud → panels → king_renderer → king_panel → spectate → main`
+`dice → items → mobs → map → player → movement → combat → king_battle → game → bot_v2 → renderer → hud → panels → king_renderer → king_panel → spectate → main`
 
 ---
 
@@ -154,14 +154,16 @@ Each player rolls d6 for each base stat (F, D, A, M, C, V) and receives one rand
 - **C** (Charisma) — bard attacks and defense vs C attacks
 - **V** (Speed) — movement cap component; defense vs D attacks; initiative
 
-Base stats rolled at start (d6 each). Can be raised +1 at Master for 50 coins (max 6 via Master; charisma `respect:3` can push to 8). XP system can also level up base stats automatically.
+Base stats rolled at start (d6 each). Can be raised +1 at Master for 50 coins. **There is no ceiling from XP or from Learn** (`respect:3` charisma ability). The only purchase limit is the Master rule: max 6 purchases total (8 with Magic Flute, 5 before charisma reaches 8). XP system can level up stats indefinitely.
 
 ### XP System
 Each stat has an XP counter (`player.xp[stat]`). Threshold = `baseStat × 10`. On threshold: stat +1 and XP carries over. Sources per stat:
 - **F/D/M**: Hit +1, Miss +2, spell used (+magicValue for M), random fight +1, solo-kill +3
 - **A**: Parry +1, receive hit +2, movement score bonus
-- **C**: Unique dialogue (+tier), sell value÷50, chest opened +1
+- **C**: **Distinct charisma abilities per fight** (each `family:tier` combo once per fight, XP = tier, max 3 XP-giving actions per fight), sell value÷50, chest opened +1, Learn dialogue (+1 C, max 4 dialogue gains per game)
 - **V**: Tiles walked÷10, block DEX hit +1, receive DEX hit +2
+
+**Charisma XP balancing:** C XP comes from distinct abilities used (not repeated rolls), tuned to match the XP rate of F/D/M builds. Near-miss rolls give a +1 C buff but no XP.
 
 XP progress shown as mini bars in the stats table; full details via the "XP Details" button → `modal-xp`.
 
@@ -221,18 +223,18 @@ Items like **Dragon Blood 2F2M2V**, **Vampire Blood 2D2V**, **Werewolf Blood 2F2
 - Magic defense: `M + d6` by default; `A + d6` with Arcane enchantment; +armorValue bonus with Protection spell in inventory.
 
 ### Bard (Charisma combat)
-- Roll `C + d6` vs mob's flat C stat. If `diff >= 1`, enters `charisma_pick` subphase.
+- Roll `C + d6` vs mob's flat C stat. If `diff >= 1`, enters `charisma_pick` subphase. On fail (within 3), player gets +1 C buff for the rest of the fight (near-miss bonus).
 - No damage unless Cursed Rattle equipped.
 - On success, player picks a **family + tier** action (`applyCharismaOutcome` in combat.js):
   - **friendly** (1=gift item, 2=heal 1❤, 3=befriend mob → adds to `friendsList`)
   - **mock** (1=swap mob stats, 2=debuff mob stat, 3=buff player stat)
-  - **deceive** (1/2/3=steal coins and flee; amount scales)
-  - **respect** (1=item exchange, 2=receive quest, 3=permanent +1 stat)
+  - **deceive** (1/2/3=steal coins and flee; amount scales with zone tier)
+  - **respect** (1=item exchange, 2=receive quest, 3=Learn dialogue: +1 C permanently, no ceiling, max 4 dialogue gains per game)
   - **kill** (1=instant kill, unlocked by Cursed Rattle)
 - Befriended mobs join `player.friendsList` and can be deployed in later combat (`deploy_friend` action).
 - Charisma outcomes: `charisma_end` (flee), `befriended`, `ongoing` (fight continues).
 - The `BARD_ABILITIES` catalog in items.js (I/II/III tiers) is a legacy structure; not used by combat.
-- Max 4 dialogue stat gains per player (`dialogueSkillsGained` counter).
+- **C XP**: Each distinct `family:tier` ability used in a fight grants C XP once (tier 1 = 1 XP, tier 2 = 2 XP, tier 3 = 3 XP), max 3 XP-giving actions per fight. Repeated abilities in the same fight give no XP. Near-miss rolls give no XP.
 
 ### Utility Spells
 | Spell | Effect | Notes |
@@ -251,9 +253,14 @@ Sharpness (+3F), Fury (−tier×A on hit), Bloodlust (+1 heart on kill), Plunder
 
 ### PVP (post-Dragon)
 After Dragon dies, Princess appears at Dragon's tile. PVP is active.
+- Living players block movement like bosses; moving onto a player tile starts a PVP fight.
+- **Alternating turns** (not simultaneous): initiative is `V + d6` for each player, ties re-rolled. Winner acts first.
+- Both sides can use consumables. Escapes work as in normal fights (Rope/Invisibility/Stealth Shoes), unless the escaper is chained.
+- The **Invisibility Cloak does NOT let you pass other players** — it only prevents being blocked by minibosses.
+- Loser dies; winner takes all items and coins from the loser's inventory and equipped slots.
+- Killing every other player does **not** end the game; the survivor must still carry the Princess to the FINISH tile.
+- PVP uses the normal combat panel (no separate UI). Combat log shows newest lines on top.
 - Any player who steps on Princess's tile picks her up (`hasPrincess = true`).
-- Players can fight each other; if carrier is defeated, Princess drops at that tile.
-- Carrier who reaches FINISH tile wins the game.
 
 ### Death
 Player with 0 hearts: `isAlive = false`, removed from turn rotation. Drops all inventory and equipped items (loot pool for killer). If last player alive dies, game over.
@@ -346,8 +353,6 @@ Always active (not just in all-bot mode). Speed controls are only shown in all-b
 
 **`w`-prefix tiles in CSV** — CSV notation `wX` (wall between this tile and adjacent) is treated as tile type `X` with no wall. Wall direction logic unimplemented.
 
-**PVP combat flow** — `startPvpCombat()` is implemented but never triggered. Need: when a player moves onto a tile occupied by another player (during PVP), start PVP combat.
-
 **Disenchant spell** — `effect: 'disenchant'` in catalog, no handler.
 
 **Curse spell** — `effect: 'curse'` in catalog, pure placeholder; mechanic not yet designed.
@@ -378,6 +383,49 @@ Always active (not just in all-bot mode). Speed controls are only shown in all-b
 - **Mob attack announcement** — mob's next attack type is pre-rolled via `prepareNextMobAttack()` when transitioning to mob_attack subphase, stored in `state.pendingCombat.mobNextAttackType`, and passed to `takeMobAttack()` so the announced type is used exactly.
 - **Specialization via slot cap** — 7 slots, max 5 equipped. Core tension of the game.
 - **Tier system** — enemies and loot scale across 4 tiers (0–3) as players progress across the map.
+- **Enchantment categories NOT enforced** — any enchantment can be applied to any slot. This is intentional design, not a bug.
+- **No stat ceilings from XP or abilities** — stats can level indefinitely through XP. The only limit is the Master purchase rule (max 6 purchases, C 8 with Magic Flute, 5 purchases before C reaches 8).
 - **Bot AI is swappable** — `BotAI.chooseCombatAction(player, mob)` and `BotAI.takeTurn(player)` are designed as a drop-in replacement target for a neural network.
 - **King Battle is self-contained** — `KingBattle` owns all tactical state; `KingPanel` owns all UI; `KingRenderer` owns its own canvas. Game.js triggers the `KING_BATTLE` phase and receives the victory/defeat callback.
 - **SpectateStats always active** — initialized in `main.js` for every game, not just spectate mode. The stats overlay and charts are always available; speed controls appear only for all-bot games.
+
+---
+
+## Testing & Validation
+
+Before committing changes, always validate with the simulation harnesses:
+
+**Quick validation:**
+```bash
+node sim_v2.js 5 1         # Single bot: expect ~80–130 turns, most wins
+node sim_v2.js 2 4 0 F,D,M,G  # Four bots: expect winner, no freeze/crash
+```
+
+**Balance validation:**
+```bash
+node engine_sim.js         # Run F/D/M/C builds, measure XP per turn
+                          # C build's C XP/turn should be within ±15% of F/D/M median
+```
+
+**Browser validation:**
+- Open `index.html` in a browser
+- Start a game with 1 human + 3 bots
+- Play through a fight, a shop, and a charisma roll
+- Check console for errors
+
+Both `sim_v2.js` and `engine_sim.js` must pass before committing.
+
+---
+
+## Important Warnings for Future Sessions
+
+**DO NOT delete systems described as "unused" or "legacy" without:**
+1. Checking all live code for references
+2. Confirming with the user
+3. Reading the actual implementation to understand what it does
+
+Past mistakes:
+- ❌ PvP combat was incorrectly deleted because it was described as "unused simultaneous" when it was actually the active alternating-turn PvP system
+- ❌ Trust the code over documentation comments — this file may be outdated
+
+Always verify by reading the code and testing before removing anything.
