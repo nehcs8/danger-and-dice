@@ -741,7 +741,7 @@ const Panels = (() => {
       return `d6×${m} coins (${m}–${6 * m})${zMult > 1 ? `, zone ×${zMult}` : ''}, end encounter`;
     };
     const giftN     = Combat.CHA_ZONE_GIFT_ITEMS[zone];
-    const learnStat = (player?.baseStats?.C ?? 0) < Combat.CHA_LEARN_CAP ? '+1 C' : '+1 M/A/V (C maxed)';
+    const learnStat = '+1 C (always)';
 
     const families = [
       { key:'friendly', label:'Friendly', color:'#3a8a3a', options:[

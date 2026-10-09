@@ -37,6 +37,8 @@ class Player {
     this.xp                 = { F:0, D:0, A:0, M:0, C:0, V:0 };
     this.masterSkillsBought = 0;
     this.dialogueSkillsGained = 0;
+    this.charismaAbilitiesUsed = new Set(); // "family:tier" keys used this fight
+    this.charismaXpActionsThisFight = 0; // count of XP-giving charisma actions this fight
   }
 
   // ── Stats ────────────────────────────────────────────────────────────────
@@ -274,6 +276,8 @@ class Player {
     this.priestBuff     = 0;
     this.combatXpHits   = 0;
     this.halfUsedSpells = new Set();
+    this.charismaAbilitiesUsed = new Set();
+    this.charismaXpActionsThisFight = 0;
   }
 
   // ── Tile memory ──────────────────────────────────────────────────────────

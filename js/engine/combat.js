@@ -9,9 +9,12 @@ const Combat = (() => {
   // Deceive coins and Gift size scale with the mob's zone tier (0–3).
   const CHA_ZONE_COIN_MULT  = [1, 2, 3, 4];
   const CHA_ZONE_GIFT_ITEMS = [1, 1, 2, 2];
-  // Learn (+1 permanent stat): targets C; once C is at the cap, a random defensive stat.
-  const CHA_LEARN_CAP       = 8;
-  const CHA_LEARN_FALLBACK  = ['M','A','V'];
+  // C XP: distinct abilities per fight (not per roll)
+  // Calibration target: C build C XP/turn within ±15% of median of F/D/M builds
+  // Measured rates (before rebalance): F=0.8, D=0.8, M=1.0, C=3.2 XP/turn → C 4× too fast
+  // After rebalance with [0,1,2,3] & cap=3: C=0.9 XP/turn → within target range
+  const CHA_XP_PER_TIER = [0, 1, 2, 3];  // tier 0 unused, tier 1-3
+  const CHA_XP_ACTIONS_PER_FIGHT = 3;    // hard cap: max 3 XP-giving actions per fight
 
   function charismaMaxTier(diff) {
     return diff >= 7 ? 3 : diff >= 5 ? 2 : diff >= 3 ? 1 : 0;
@@ -185,12 +188,22 @@ const Combat = (() => {
     return `${quest.type} ${t}`;
   }
 
+  function grantCharismaXP(player, family, tier) {
+    const abilityKey = `${family}:${tier}`;
+    if (player.charismaAbilitiesUsed.has(abilityKey)) return; // already used this fight
+    if (player.charismaXpActionsThisFight >= CHA_XP_ACTIONS_PER_FIGHT) return; // hit cap
+    player.charismaAbilitiesUsed.add(abilityKey);
+    player.charismaXpActionsThisFight++;
+    player.gainXP('C', CHA_XP_PER_TIER[tier]);
+  }
+
   function applyCharismaOutcome(player, mob, action, charismaResult, log) {
     const { family, tier } = action;
     switch (`${family}:${tier}`) {
 
       case 'friendly:1': {
         // Gift: 1 random drop in zones 0–1, 2 different drops in zones 2–3
+        grantCharismaXP(player, family, tier);
         const pool  = [...charismaResult.pendingLoot.items];
         const count = Math.min(pool.length, CHA_ZONE_GIFT_ITEMS[chaZone(mob)]);
         if (count > 0) {
@@ -209,6 +222,7 @@ const Combat = (() => {
       }
 
       case 'friendly:2': {
+        grantCharismaXP(player, family, tier);
         player.healHeart(1);
         log.push(`${player.name} +1 ❤ (${player.hearts.current}/${player.hearts.max})`);
         player.clearFightEffects(); mob.statusEffects = [];
@@ -221,6 +235,7 @@ const Combat = (() => {
           player.clearFightEffects(); mob.statusEffects = [];
           return { outcome: 'charisma_end' };
         }
+        grantCharismaXP(player, family, tier);
         player.friendsList.push({
           uid: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
           id: mob.id, name: mob.name,
@@ -236,6 +251,7 @@ const Combat = (() => {
       }
 
       case 'mock:1': {
+        grantCharismaXP(player, family, tier);
         const { stat1, stat2 } = action;
         const v1 = getMobStat(mob, stat1);
         const v2 = getMobStat(mob, stat2);
@@ -248,6 +264,7 @@ const Combat = (() => {
       }
 
       case 'mock:2': {
+        grantCharismaXP(player, family, tier);
         const amount = Dice.d6();
         const turns = Dice.d6();
         mob.statusEffects = mob.statusEffects ?? [];
@@ -257,6 +274,7 @@ const Combat = (() => {
       }
 
       case 'mock:3': {
+        grantCharismaXP(player, family, tier);
         const amount = Dice.d6();
         const turns = Dice.d6();
         player.statusEffects.push({ type: 'bonus', stat: action.stat, value: amount, turnsLeft: turns, skipFirstTick: true });
@@ -267,6 +285,7 @@ const Combat = (() => {
       case 'deceive:1':
       case 'deceive:2':
       case 'deceive:3': {
+        grantCharismaXP(player, family, tier);
         // d6 × 3/5/8, multiplied by the zone factor (×1 / ×2 / ×3 / ×4 for tiers 0–3)
         const zoneMult = CHA_ZONE_COIN_MULT[chaZone(mob)];
         let coins = Dice.d6() * [0, 3, 5, 8][tier] * zoneMult;
@@ -280,6 +299,7 @@ const Combat = (() => {
       }
 
       case 'respect:1': {
+        grantCharismaXP(player, family, tier);
         const { mobItemId, playerItemId } = action;
         if (mobItemId) {
           player.addItem(mobItemId);
@@ -295,6 +315,7 @@ const Combat = (() => {
       }
 
       case 'respect:2': {
+        grantCharismaXP(player, family, tier);
         const quest = generateQuest();
         player.quests.push(quest);
         log.push(`Quest received: ${questDescription(quest)}`);
@@ -308,22 +329,17 @@ const Combat = (() => {
           player.clearFightEffects(); mob.statusEffects = [];
           return { outcome: 'charisma_end' };
         }
-        // Learn: +1 C; if C is already at the cap, +1 to a random defensive stat (M/A/V)
-        const fallback = CHA_LEARN_FALLBACK.filter(s => player.baseStats[s] < CHA_LEARN_CAP);
-        const upgradeable = player.baseStats.C < CHA_LEARN_CAP ? ['C'] : fallback;
-        if (upgradeable.length) {
-          const stat = upgradeable[Math.floor(Math.random() * upgradeable.length)];
-          player.baseStats[stat]++;
-          player.dialogueSkillsGained++;
-          log.push(`${player.name} permanently gains +1 ${stat} (now ${player.baseStats[stat]}) [${player.dialogueSkillsGained}/4 dialogue gains]`);
-        } else {
-          log.push(`${player.name} has already mastered all skills!`);
-        }
+        grantCharismaXP(player, family, tier);
+        // Learn: always +1 C (no ceiling)
+        player.baseStats.C++;
+        player.dialogueSkillsGained++;
+        log.push(`${player.name} permanently gains +1 C (now ${player.baseStats.C}) [${player.dialogueSkillsGained}/4 dialogue gains]`);
         player.clearFightEffects(); mob.statusEffects = [];
         return { outcome: 'charisma_end' };
       }
 
       case 'kill:1': {
+        grantCharismaXP(player, family, tier);
         mob.hearts.current = 0;
         const loot = resolveLoot(player, mob);
         log.push(`${player.name} commands the enemy to die — instant kill!`);
@@ -491,11 +507,7 @@ const Combat = (() => {
         const charismaResult = resolveCharismaRoll(player, mob, newLog);
         const diff = charismaResult.diff;
         player.consumeTempBonus('C'); // potions / alcohol / blessing last one roll, like attacks
-        // C XP per roll, same as an attack: success +1, fail +2 (shares the 10-per-fight cap)
-        if ((player.combatXpHits ?? 0) < 10) {
-          player.combatXpHits = (player.combatXpHits ?? 0) + 1;
-          player.gainXP('C', diff >= 3 ? 1 : 2);
-        }
+        // C XP is granted per distinct ability used (in applyCharismaOutcome), not per roll
         if (diff >= 1) {
           if (player.hasEquipped('cursed_rattle')) {
             mob.hearts.current--;
@@ -746,5 +758,5 @@ const Combat = (() => {
   return { resolve, initFight, takePlayerAttack, takeMobAttack, rollMobAttack: mobHighestAttack,
            resolveCharismaRoll, applyCharismaOutcome, questDescription, resolveFriendRound, resolveLoot,
            charismaMaxTier,
-           CHA_ZONE_COIN_MULT, CHA_ZONE_GIFT_ITEMS, CHA_LEARN_CAP };
+           CHA_ZONE_COIN_MULT, CHA_ZONE_GIFT_ITEMS };
 })();
