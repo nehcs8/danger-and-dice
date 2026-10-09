@@ -44,6 +44,7 @@ const Game = (() => {
     defeatedBosses:   new Set(),
     winner:           null,
     pendingCombat:        null,   // { mob, isBoss, isPvp }
+    pendingPvp:           null,   // player-vs-player fight (see PVP section)
     pendingChest:         null,   // { tier }
     pendingPriest:        null,   // { buff }
     pendingLootDescription: null, // string shown in loot popup
@@ -309,6 +310,29 @@ const Game = (() => {
 
   // ── Submit action (called by UI / bot) ────────────────────────────────────
   function submitAction(action) {
+    // PvP fight: both participants act (by playerId), simultaneously
+    if (state.phase === Phase.PVP_COMBAT) {
+      // The normal combat actions (from the combat panel) act for whichever participant the
+      // fight is waiting on; bots/tools may also pass an explicit playerId.
+      const who = action?.playerId ?? pvpAwaited();
+      const p   = who ? playerById(who) : null;
+      switch (action?.type) {
+        case 'pvp_use_item': case 'use_item': handlePvpUseItem(who, action.itemId); break;
+        case 'pvp_choose': handlePvpChoose(who, action.choice); break;
+        case 'attack':     handlePvpChoose(who, { kind:'attack', attackType: action.attackType, spellId: action.spellId ?? null }); break;
+        case 'run':        handlePvpChoose(who, { kind:'run' }); break;
+        case 'bard':       handlePvpChoose(who, { kind:'charm' }); break;
+        case 'bail': {
+          const m = action.method
+            ?? (p?.hasEquipped('stealth_shoes') ? 'stealth_shoes' : p?.hasItem('rope') ? 'rope' : 'sp_invisibility');
+          handlePvpChoose(who, { kind: m === 'sp_invisibility' ? 'invisibility' : m === 'stealth_shoes' ? 'run' : 'rope' });
+          break;
+        }
+        case 'pvp_defend': case 'defend': handlePvpDefend(who); break;
+        case 'use_curse':  handlePvpCurse(who, action.stat); break;
+      }
+      return;
+    }
     // use_item is available in most phases (not setup or game-over)
     if (action?.type === 'use_item' &&
         state.phase !== Phase.SETUP_ROLL && state.phase !== Phase.GAME_OVER) {
@@ -495,6 +519,7 @@ const Game = (() => {
             player.position = { ...dest };
             emit('player_moved', { player: player.name, position: dest });
           }
+          if (maybeStartPvp(player)) return;
           if (state.pvpActive && !state.princess.carriedBy) pickUpPrincess(player);
           resolveTileEvent();
         }
@@ -509,6 +534,7 @@ const Game = (() => {
     player.gainXP('V', tilesWalked / 10);
     player.gainXP('A', Math.min(2, tilesWalked / calcInventoryWeight(player)));
 
+    if (maybeStartPvp(player)) return;
     if (state.pvpActive && !state.princess.carriedBy) pickUpPrincess(player);
 
     resolveTileEvent();
@@ -1127,6 +1153,7 @@ const Game = (() => {
     log(`${player.name} teleports to (${dest.x}, ${dest.y})`);
     emit('item_used', { player: player.name, item: getItem('sp_teleport') });
     emit('player_moved', { player: player.name, position: dest });
+    if (maybeStartPvp(player)) return;
     resolveTileEvent();
   }
 
@@ -1823,11 +1850,249 @@ const Game = (() => {
   }
 
   // ── PVP combat ────────────────────────────────────────────────────────────
+  const PVP_DEF = { F:'A', D:'V', M:'M' };
+
+  function maybeStartPvp(mover) {
+    if (!state.pvpActive || !mover.isAlive) return false;
+    const other = state.players.find(q => q !== mover && q.isAlive &&
+      q.position.x === mover.position.x && q.position.y === mover.position.y);
+    if (!other) return false;
+    startPvpCombat(mover, other);
+    return true;
+  }
+
   function startPvpCombat(attacker, defender) {
     if (!state.pvpActive) return;
-    state.pendingCombat = { mob: defender, isPvp: true };
+    state.pendingPvp = {
+      ids: [attacker.id, defender.id], attackerId: attacker.id,
+      round: 1, active: null, step: 'act', pendingAttack: null,
+      chained: {}, smoke: {}, fire: {}, log: [], logSent: 0, curseUsed: false,
+    };
+    for (const p of [attacker, defender]) { p.clearFightEffects(); p.chainedTurns = 0; }
+    log(`⚔ ${attacker.name} attacks ${defender.name}!`);
+    // Kryss strikes before the fight starts
+    for (const [a, d] of [[attacker, defender], [defender, attacker]]) {
+      if (a.hasEquipped('kryss')) { d.hearts.current = Math.max(0, d.hearts.current - 1); pvpLog(`Kryss: ${a.name} strikes first — ${d.name} ❤ ${d.hearts.current}`); }
+    }
+    // initiative
+    let ra, rd;
+    do { ra = attacker.getStat('V') + Dice.d6(); rd = defender.getStat('V') + Dice.d6(); } while (ra === rd);
+    state.pendingPvp.active = ra > rd ? attacker.id : defender.id;
+    pvpLog(`Initiative: ${attacker.name} ${ra} vs ${defender.name} ${rd} → ${playerById(state.pendingPvp.active).name} goes first`);
     state.phase = Phase.PVP_COMBAT;
-    emit('state_change', { phase: state.phase, attacker: attacker.name, defender: defender.name });
+    state.pendingPvp.logSent = state.pendingPvp.log.length;   // the panel shows these lines when it opens
+    emit('state_change', { phase: state.phase, player: attacker.name, attacker: attacker.name, defender: defender.name, pvp: pvpView() });
+    if (pvpCheckDeaths()) return;
+    beginPvpAct();
+  }
+
+  function pvpLog(msg) { state.pendingPvp?.log.push(msg); log(msg); }
+
+  function pvpAwaited() {
+    const pv = state.pendingPvp; if (!pv) return null;
+    return pv.step === 'act' ? pv.active : pvpOpponent(pv.active).id;
+  }
+
+  function pvpView() {
+    const pv = state.pendingPvp; if (!pv) return null;
+    const awaited = pvpAwaited();
+    return {
+      round: pv.round, attackerId: pv.attackerId, activeId: pv.active, step: pv.step,
+      pendingAttack: pv.pendingAttack ? { attackType: pv.pendingAttack.attackType, spellId: pv.pendingAttack.spellId ?? null } : null,
+      players: pv.ids.map(id => { const p = playerById(id); return {
+        id, name: p.name, isBot: p.isBot, hearts: { ...p.hearts }, chained: !!pv.chained[id],
+        smoke: !!pv.smoke[id], active: pv.active === id }; }),
+      waitingFor: awaited ? [awaited] : [],
+      log: pv.log.slice(-14),
+    };
+  }
+  function emitPvp(outcome, extra = {}) {
+    const pv = state.pendingPvp;
+    const view = pvpView();
+    emit('pvp_update', { outcome, ...view, ...extra });
+    // the regular combat panel listens to combat_update: send only the new log lines
+    const newLog = pv ? pv.log.slice(pv.logSent) : [];
+    if (pv) pv.logSent = pv.log.length;
+    emit('combat_update', { pvp: true, outcome, newLog, pvpView: view, ...extra,
+                            player: current()?.name, combatSubPhase: 'pvp' });
+  }
+
+  function pvpOpponent(id) { const pv = state.pendingPvp; return playerById(pv.ids.find(x => x !== id)); }
+
+  // Start of the active player's action: Flame burns first
+  function beginPvpAct() {
+    const pv = state.pendingPvp;
+    pv.step = 'act'; pv.pendingAttack = null; pv.curseUsed = false;
+    const p = playerById(pv.active);
+    if (pv.fire[p.id]) {
+      p.hearts.current = Math.max(0, p.hearts.current - pv.fire[p.id]);
+      pvpLog(`${p.name} burns (−${pv.fire[p.id]}) ❤ ${p.hearts.current}`);
+      pv.fire[p.id] = 0;
+      if (pvpCheckDeaths()) return;
+    }
+    emitPvp('ongoing');
+  }
+
+  function handlePvpUseItem(playerId, itemId) {
+    const pv = state.pendingPvp; if (!pv || pvpAwaited() !== playerId) return;
+    const p = playerById(playerId), opp = pvpOpponent(playerId);
+    const item = getItem(itemId);
+    if (!item || !p.hasItem(itemId)) return;
+    const eff = item.effect;
+    const defending = pv.step === 'defend';
+    if (itemId === 'chain') {
+      if (defending || pv.chained[opp.id]) return;
+      pv.chained[opp.id] = true; opp.chainedTurns = 99;
+      p.removeItem(itemId); pvpLog(`${p.name} chains ${opp.name} — no escape!`);
+    } else if (eff === 'immune_one_turn') {
+      if (!defending || pv.smoke[playerId]) return;          // smoke answers an incoming attack
+      pv.smoke[playerId] = true; p.removeItem(itemId); pvpLog(`${p.name} vanishes in smoke!`);
+    } else if (eff?.type === 'heal') {
+      if (p.hearts.current >= p.hearts.max) return;
+      p.healHeart(eff.value ?? 1); p.removeItem(itemId); pvpLog(`${p.name} drinks ${item.name} — ❤ ${p.hearts.current}`);
+    } else if (eff?.stat && /^pot_/.test(itemId)) {
+      if (p.hasTempBonus(eff.stat)) return;
+      p.addTempBonus(eff.stat, eff.value); p.removeItem(itemId); pvpLog(`${p.name} drinks ${item.name}`);
+    } else if (item.statBonus && !item.slot) {                      // blood drops: bonus for this fight
+      for (const [st, v] of Object.entries(item.statBonus)) p.statusEffects.push({ type:'drop_bonus', stat: st, value: v, turnsLeft: 9999 });
+      p.removeItem(itemId); pvpLog(`${p.name} drinks ${item.name}`);
+    } else {
+      return;                                                      // not usable in PvP
+    }
+    emit('item_used', { player: p.name, item });
+    emitPvp('ongoing');
+  }
+
+  function handlePvpCurse(playerId, stat) {
+    const pv = state.pendingPvp; if (!pv || pv.step !== 'act' || pv.active !== playerId) return;
+    const p = playerById(playerId), opp = pvpOpponent(playerId);
+    if (!p.hasItem('sp_curse') || pv.curseUsed || !['F','D','A','M','C','V'].includes(stat)) return;
+    const roll = Dice.d6();
+    opp.statusEffects.push({ type: 'malus', stat, value: -roll, turnsLeft: 4 });
+    p.removeItem('sp_curse'); pv.curseUsed = true;
+    pvpLog(`${p.name} curses ${opp.name} — ${stat} −${roll} for 4 turns`);
+    emit('item_used', { player: p.name, item: getItem('sp_curse') });
+    emitPvp('ongoing');
+  }
+
+  function pvpCanChoose(p, choice) {
+    const pv = state.pendingPvp;
+    const escape = ['run','rope','invisibility','charm'].includes(choice?.kind);
+    if (escape && pv.chained[p.id]) return false;
+    switch (choice?.kind) {
+      case 'attack':
+        if (!['F','D','M'].includes(choice.attackType)) return false;
+        if (choice.attackType === 'M' && !p.canAttackMagic()) return false;
+        if (choice.spellId && (!p.hasItem(choice.spellId) || getItem(choice.spellId)?.subtype !== 'attack')) return false;
+        return true;
+      case 'run': case 'charm': return true;
+      case 'rope':         return p.hasItem('rope');
+      case 'invisibility': return p.hasItem('sp_invisibility');
+    }
+    return false;
+  }
+
+  function handlePvpChoose(playerId, choice) {
+    const pv = state.pendingPvp; if (!pv || pv.step !== 'act' || pv.active !== playerId) return;
+    const p = playerById(playerId), o = pvpOpponent(playerId);
+    if (!pvpCanChoose(p, choice)) { log(`${p.name}: invalid PvP choice`); return; }
+    if (choice.kind !== 'attack') {
+      let ok = false;
+      if (choice.kind === 'rope')              { p.removeItem('rope'); ok = true; }
+      else if (choice.kind === 'invisibility') { p.removeItem('sp_invisibility'); ok = true; }
+      else if (choice.kind === 'run') {
+        if (p.hasEquipped('stealth_shoes')) ok = true;
+        else { const r1 = p.getStat('V') + Dice.d6(), r2 = o.getStat('V') + Dice.d6(); p.consumeTempBonus('V'); o.consumeTempBonus('V'); ok = r1 > r2;
+               pvpLog(`${p.name} runs: V ${r1} vs ${r2}`); }
+      } else if (choice.kind === 'charm') {
+        const r1 = p.getStat('C') + Dice.d6(), r2 = o.getStat('C') + Dice.d6(); p.consumeTempBonus('C'); o.consumeTempBonus('C'); ok = r1 > r2;
+        pvpLog(`${p.name} tries to talk their way out: C ${r1} vs ${r2}`);
+      }
+      if (ok) { pvpLog(`${p.name} escapes from ${o.name}!`); return endPvp('escaped', { escaped: p.name }); }
+      pvpLog(`${p.name} fails to escape`);
+      return passPvpTurn();
+    }
+    // attack: announce it, the defender answers
+    pv.pendingAttack = { attackType: choice.attackType, spellId: choice.spellId ?? null };
+    pv.step = 'defend';
+    pvpLog(`${p.name} attacks with ${STAT_NAMES[choice.attackType] ?? choice.attackType}${choice.spellId ? ' + ' + getItem(choice.spellId).name : ''}!`);
+    emitPvp('ongoing');
+  }
+
+  function handlePvpDefend(playerId) {
+    const pv = state.pendingPvp; if (!pv || pv.step !== 'defend' || pvpAwaited() !== playerId) return;
+    const a = playerById(pv.active), d = playerById(playerId);
+    const { attackType: t, spellId } = pv.pendingAttack;
+    let atk = a.getStat(t) + Dice.d6();
+    a.consumeTempBonus(t);
+    if (spellId && a.hasItem(spellId)) {
+      const sp = getItem(spellId);
+      atk += (sp.magicValue ?? 0) * (a.hasEquipped('dark_tome') ? 2 : 1);
+      a.removeItem(spellId);
+    }
+    const ds = t === 'M' && d.hasEnchantment('arcane') ? 'A' : PVP_DEF[t];
+    const def = d.getDefenseStat(t) + Dice.d6();
+    d.consumeTempBonus(ds);
+    if (atk <= def) pvpLog(`${a.name} ${t} ${atk} vs ${def} — blocked`);
+    else if (pv.smoke[d.id]) pvpLog(`${a.name} ${t} ${atk} vs ${def} — lost in the smoke`);
+    else if (a.hasEquipped('garrote') && t === 'F' && d.hearts.current <= 2) { d.hearts.current = 0; pvpLog(`${a.name} garrotes ${d.name}!`); }
+    else if (d.hasEnchantment('thorns') && Math.random() < 0.3) {
+      a.hearts.current = Math.max(0, a.hearts.current - 1); pvpLog(`${a.name} hits — thorns reflect it! ${a.name} ❤ ${a.hearts.current}`);
+    } else {
+      d.hearts.current = Math.max(0, d.hearts.current - 1);
+      pvpLog(`${a.name} ${t} ${atk} vs ${def} — hit! ${d.name} ❤ ${d.hearts.current}`);
+      if (a.hasEnchantment('flame')) pv.fire[d.id] = (pv.fire[d.id] ?? 0) + 1;
+    }
+    pv.smoke[d.id] = false;
+    if (pvpCheckDeaths()) return;
+    passPvpTurn();
+  }
+
+  function passPvpTurn() {
+    const pv = state.pendingPvp;
+    const done = playerById(pv.active);
+    done.statusEffects = done.statusEffects
+      .map(e => e.type === 'malus' ? { ...e, turnsLeft: e.turnsLeft - 1 } : e)
+      .filter(e => e.type !== 'malus' || e.turnsLeft > 0);
+    pv.active = pvpOpponent(pv.active).id;
+    if (pv.active === pv.ids[0]) pv.round++;
+    beginPvpAct();
+  }
+
+  // Returns true if the fight ended.
+  function pvpCheckDeaths() {
+    const pv = state.pendingPvp; if (!pv) return true;
+    const [A, B] = pv.ids.map(playerById);
+    const dead = [A, B].find(p => p.hearts.current <= 0);
+    if (!dead) return false;
+    const winner = dead === A ? B : A;
+    dead.isAlive = false;
+    // winner takes everything
+    const loot = { coins: dead.coins, items: [] };
+    for (const slot of Object.keys(dead.equipped)) { const it = dead.equipped[slot]; if (it) { loot.items.push(it.id); dead.equipped[slot] = null; } }
+    loot.items.push(...dead.inventory);
+    dead.inventory = []; dead.coins = 0;
+    winner.coins += loot.coins;
+    for (const id of loot.items) winner.addItem(id);
+    pvpLog(`☠ ${dead.name} is slain by ${winner.name}! ${winner.name} takes ${loot.coins} coins and ${loot.items.length} items`);
+    if (dead.hasPrincess) { dropPrincess(dead); pickUpPrincess(winner); }
+    emit('player_defeated', { player: dead.name, by: winner.name });
+    emit('combat_victory', { player: winner.name, mob: dead.name, loot, mobTier: 3, isAnimal: false, isPvp: true });
+    endPvp('victory', { winner: winner.name, loser: dead.name, loot });
+    return true;
+  }
+
+  function endPvp(outcome, extra = {}) {
+    const pv = state.pendingPvp;
+    for (const id of pv.ids) { const p = playerById(id); p.chainedTurns = 0; p.clearFightEffects(); }
+    emitPvp(outcome, extra);
+    state.pendingPvp = null;
+    checkGameOver();
+    if (state.phase === Phase.GAME_OVER) return;
+    // the fight ends the mover's turn (no tile event); a surviving mover picks up the princess here
+    const mover = current();
+    if (mover.isAlive && state.pvpActive && !state.princess.carriedBy) pickUpPrincess(mover);
+    endTileInteraction();
   }
 
   // ── Princess ──────────────────────────────────────────────────────────────
@@ -1878,6 +2143,8 @@ const Game = (() => {
     resolveCombatResult,
     startPvpCombat,
     dropPrincess,
+    getPvpView: pvpView,
+    getPvpAwaited: () => pvpAwaited(),
     getState: () => state,
     getPlayers: () => state.players,
     getCurrentPlayer: current,
