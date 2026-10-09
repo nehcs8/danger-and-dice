@@ -1,0 +1,22 @@
+# Training data
+ml/training_data.jsonl
+
+# Profiling
+*.cpuprofile
+
+# Node modules
+node_modules/
+
+# Generated plots and benchmarks
+wins/plots/
+wins/run_comparison.png
+benchmark_results.json
+engine_sim_results.json
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
