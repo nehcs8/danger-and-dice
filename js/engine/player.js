@@ -137,8 +137,11 @@ class Player {
 
   equip(item) {
     if (!this.canEquip(item)) return false;
-    this.equipped[item.slot] = item;
-    this.inventory = this.inventory.filter(id => id !== item.id);
+    // Store a per-player copy to avoid mutating the shared catalog object
+    this.equipped[item.slot] = { ...item };
+    // Remove only one copy from inventory
+    const idx = this.inventory.indexOf(item.id);
+    if (idx !== -1) this.inventory.splice(idx, 1);
     return true;
   }
 

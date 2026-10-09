@@ -923,7 +923,14 @@ const Game = (() => {
   // ── Work ──────────────────────────────────────────────────────────────────
   function handleWork() {
     const player   = current();
-    const { x }   = player.position;
+    const { x, y } = player.position;
+
+    // Check if already used
+    if (player.hasUsedTile(x, y)) {
+      log(`${player.name} has already worked at this tile`);
+      showLootConfirm('You have already worked here this cycle.');
+      return;
+    }
 
     // Zone tier from x-coordinate (matches miniboss tier distribution on the map)
     const zoneTier = x < 21 ? 1 : x < 31 ? 2 : x < 41 ? 3 : 4;
@@ -936,6 +943,7 @@ const Game = (() => {
     const earned   = zoneTier * diceRoll * baseStat;
 
     player.coins += earned;
+    player.markTileUsed(x, y);
     log(`${player.name} works: +${earned}g (${stat}${baseStat}×${diceRoll}, zone ${zoneTier})`);
     emit('coins_changed', { player: player.name, coins: player.coins, delta: earned });
     showLootConfirm(`You earned ${earned} coins from work! (zone ${zoneTier} × ${stat}=${baseStat} × roll=${diceRoll})`);
@@ -1191,6 +1199,14 @@ const Game = (() => {
       log(`${player.name} uses Smoke — immune to the next mob attack!`);
       player.removeItem(itemId);
       emit('item_used', { player: player.name, item });
+      // Emit combat_update so bots can continue
+      emit('combat_update', {
+        player: player.name,
+        mob: state.pendingCombat?.mob,
+        newLog: [`Smoke active — ${player.name} is immune to the next attack`],
+        outcome: 'ongoing',
+        combatSubPhase: state.pendingCombat?.combatSubPhase,
+      });
       return;
     }
 
@@ -1325,9 +1341,15 @@ const Game = (() => {
     const player = current();
     let atkType = Combat.rollMobAttack(mob);
     if (atkType === 'C' && player.hasEquipped('blowpipe')) {
-      // Blowpipe: immune to charisma — mob picks a different attack type
-      const fallback = ['F','D','M','V'].find(s => mob.stats[s] > 0) ?? 'F';
-      atkType = fallback;
+      // Blowpipe: immune to charisma — mob picks a different attack type from F/D/M
+      const candidates = ['F','D','M'].filter(s => mob.stats[s] > 0);
+      if (candidates.length > 0) {
+        const maxVal = Math.max(...candidates.map(s => mob.stats[s]));
+        const tied = candidates.filter(s => mob.stats[s] === maxVal);
+        atkType = tied[Math.floor(Math.random() * tied.length)];
+      } else {
+        atkType = 'F'; // fallback if all F/D/M are 0
+      }
       fightLog.push(`${mob.name} cannot use Charisma — Blowpipe deflects it!`);
     }
     state.pendingCombat.mobNextAttackType = atkType;
@@ -1584,7 +1606,7 @@ const Game = (() => {
       }
       // Defense stat used: F→A, D→V, M→M (or A with Arcane), C→C
       const _defMap = { F: 'A', D: 'V', M: 'M', C: 'C' };
-      skillUsed = (preRolledAtk === 'M' && player.equipped?.Armor?.enchantment === 'arcane')
+      skillUsed = (preRolledAtk === 'M' && player.hasEnchantment('arcane'))
         ? 'A'
         : (_defMap[preRolledAtk] ?? null);
     }
@@ -1851,6 +1873,8 @@ const Game = (() => {
 
   // ── PVP combat ────────────────────────────────────────────────────────────
   const PVP_DEF = { F:'A', D:'V', M:'M' };
+
+  function playerById(id) { return state.players.find(p => p.id === id); }
 
   function maybeStartPvp(mover) {
     if (!state.pvpActive || !mover.isAlive) return false;

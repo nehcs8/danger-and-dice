@@ -414,6 +414,13 @@ const Combat = (() => {
         const { attackType, spellId } = action;
         const spell = spellId ? getItem(spellId) : null;
 
+        // Magic attack requires a spell or Cursed Ring
+        if (attackType === 'M' && !player.canAttackMagic()) {
+          newLog.push(`${player.name} needs a spell to attack with Magic!`);
+          fightLog.push(...newLog);
+          return { outcome: 'ongoing', newLog };
+        }
+
         // Garrote: auto-kill on F when mob has ≤2 hearts (no roll)
         if (attackType === 'F' && player.hasEquipped('garrote') && mob.hearts.current <= 2) {
           player.consumeTempBonus('F');
