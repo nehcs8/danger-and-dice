@@ -37,6 +37,8 @@ class Player {
     this.xp                 = { F:0, D:0, A:0, M:0, C:0, V:0 };
     this.masterSkillsBought = 0;
     this.dialogueSkillsGained = 0;
+    this.charismaAbilitiesUsed = new Set(); // "family:tier" keys used this fight
+    this.charismaXpActionsThisFight = 0; // count of XP-giving charisma actions this fight
   }
 
   // ── Stats ────────────────────────────────────────────────────────────────
@@ -137,8 +139,11 @@ class Player {
 
   equip(item) {
     if (!this.canEquip(item)) return false;
-    this.equipped[item.slot] = item;
-    this.inventory = this.inventory.filter(id => id !== item.id);
+    // Store a per-player copy to avoid mutating the shared catalog object
+    this.equipped[item.slot] = { ...item };
+    // Remove only one copy from inventory
+    const idx = this.inventory.indexOf(item.id);
+    if (idx !== -1) this.inventory.splice(idx, 1);
     return true;
   }
 
@@ -271,6 +276,8 @@ class Player {
     this.priestBuff     = 0;
     this.combatXpHits   = 0;
     this.halfUsedSpells = new Set();
+    this.charismaAbilitiesUsed = new Set();
+    this.charismaXpActionsThisFight = 0;
   }
 
   // ── Tile memory ──────────────────────────────────────────────────────────
