@@ -1718,6 +1718,11 @@ const Game = (() => {
       ? (maxTier >= 3 && player.hasEquipped('cursed_rattle'))
       : (action.tier >= 1 && action.tier <= maxTier);
     if (!allowed) return;
+    // Trade: the mob can only hand over something from its own loot, the player only something they own
+    if (action.family === 'respect' && action.tier === 1) {
+      if (action.mobItemId && !(charismaResult?.pendingLoot?.items ?? []).includes(action.mobItemId)) return;
+      if (action.playerItemId && !player.hasItem(action.playerItemId)) return;
+    }
 
     // Ability points for charisma guild items: T1=2, T2=4, T3=6 (zone weight applied on level-up check)
     if (state.pendingCombat?.minibossTier != null && action.tier) {

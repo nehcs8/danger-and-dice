@@ -14,7 +14,7 @@ const fs = require('fs'), path = require('path'), { fork } = require('child_proc
 const { makeSandbox, get } = require('./lib_sb.js');
 
 const CAP = 250;
-const BASES = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB','BM'];
+const BASES = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB','BM','CH','CR'];
 const SPACE = {
   shield: [true, false], shieldRes: [true, false], armorEnch: [true, false],
   pegasus: [true, false], accordion: [true, false], cloak: [true, false], rope: [true, false],
@@ -36,9 +36,14 @@ const DEFAULTS = { shield:true, shieldRes:true, armorEnch:true, pegasus:true, ac
   dragonGo:0.85, kitMargin:0.05, stockpileCoins:250, curseCap:24 };
 
 // genome → the object the bot reads
+// Only parameters that differ from the defaults are sent, so profile-specific defaults
+// (e.g. CH raising C first) are kept unless the genome changes them.
 function toBot(g) {
-  const { kitMargin, ...t } = g.tune;
-  return { base: g.base, tune: { ...t, pvpKit: false, kitTarget: Math.min(0.97, t.dragonGo + kitMargin) } };
+  const full = { ...DEFAULTS, ...(g.tune ?? {}) };
+  const tune = { pvpKit: false };
+  for (const [k, v] of Object.entries(full)) if (k !== 'kitMargin' && v !== DEFAULTS[k]) tune[k] = v;
+  if (full.dragonGo !== DEFAULTS.dragonGo || full.kitMargin !== DEFAULTS.kitMargin) tune.kitTarget = Math.min(0.97, full.dragonGo + full.kitMargin);
+  return { base: g.base, tune };
 }
 const keyOf = g => g.base + '|' + Object.keys(SPACE).map(k => String(g.tune[k])).join(',');
 function describe(g) {
@@ -72,7 +77,10 @@ function runSolo(genome, seed, inspect = null, onLog = null) {
   Game.on('item_unequipped',  () => { if (!done && inShop()) kick(); });
   Game.on('skill_upgraded',   () => { if (!done) kick(); });
   Game.on('enchanted',        () => { if (!done) kick(); });
-  if (onLog) Game.on('log', d => onLog(`[T${turns}] ${BotAI.getPhase(Game.getCurrentPlayer())} ${d.message}`));
+  if (onLog) {
+    Game.on('log', d => onLog(`[T${turns}] ${BotAI.getPhase(Game.getCurrentPlayer())} ${d.message}`));
+    Game.on('combat_update', d => { for (const l of d.newLog ?? []) onLog(`[T${turns}] combat ${typeof l === 'object' ? l.text : l}`); });
+  }
   Game.on('dragon_defeated',  () => { done = 'dragon'; });
   let killer = null;
   Game.on('player_defeated',  () => { done = 'dead'; killer = Game.getState().pendingCombat?.mob?.id ?? null; });

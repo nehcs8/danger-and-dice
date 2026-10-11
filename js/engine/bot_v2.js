@@ -44,6 +44,11 @@ const BotAI = (() => {
     SS: { name:'SS', main:'auto', guildExtra:'stealth_shoes', extraFirst:true, escapeFarming:true,
           slots:['W','armor','shield','speed','charisma'] },
     // Bottomless Bag: double item drops (potions, blood) → dragon kit comes from loot. Accordion for bosses.
+    // Charmers: weapon + high Charisma; in fights they Talk when it beats Attacking (Swap the
+    // mob's strong stats onto weak ones, debuff it, buff themselves, or end the encounter
+    // profitably). CR carries the Cursed Rattle: every successful Talk also deals damage.
+    CH: { name:'CH', main:'auto', charm:true, tune:{ skillOrder:'C,main,A' } },
+    CR: { name:'CR', main:'auto', charm:true, guildExtra:'cursed_rattle', tune:{ skillOrder:'C,main,A' } },
     // Beastmaster: befriend a "?" animal with Charisma, let it land the killing blows until it
     // evolves to Savage, then send it at the dragon and keep it alive with heal potions.
     BM: { name:'BM', main:'auto', beast:true },
@@ -143,6 +148,7 @@ const BotAI = (() => {
       st, pots, heals, curses: usePots ? curses : 0, bloods, arcane, prot,
       hearts: p.hearts.current, maxHearts: p.hearts.max,
       kryss: p.hasEquipped('kryss'), garrote: p.hasEquipped('garrote'), thorns: p.hasEnchantment('thorns'),
+      charm: !!(profile(p).charm || tune(p).charm), rattle: p.hasEquipped('cursed_rattle'),
       flame: p.hasEnchantment('flame'), immuneC: p.hasEquipped('blowpipe'),
       fury: p.getEnchantmentTier('fury'), hawk: p.getEnchantmentTier('hawk_eye'),
       usePots,
@@ -209,6 +215,92 @@ const BotAI = (() => {
     return best;
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  // Charisma fight model
+  // ════════════════════════════════════════════════════════════════════════════
+  // Every roll is "value + d6 vs value + d6", so hit chances are exact. A fight is a race
+  // between the player landing hm hits (p per player turn) and the mob landing hp hits
+  // (q per mob turn); raceM() gives the exact win probability from the mob's turn, with an
+  // optional boost (pB, qB) for the next T rounds (a Mock effect lasts d6 ≈ 3 rounds).
+  // Each player turn, Talk (bard) is compared with Attack: Talk's value is the chance of each
+  // margin times the best thing it unlocks — Swap two mob stats (≥3), −d6 malus (≥5), +d6 bonus
+  // to us (≥7), Rattle damage / kill, or ending the encounter (Learn, heal, trade, gift, steal).
+  const _beatT = (() => { const t = []; for (let k = -6; k <= 6; k++) { let w = 0; for (let i = 1; i <= 6; i++) for (let j = 1; j <= 6; j++) if (i + k > j) w++; t.push(w / 36); } return t; })();
+  // P(a + d6 > d + d6), linear in between for fractional (expected) values
+  function beatP(a, d) {
+    const k = a - d;
+    if (k >= 6) return 1; if (k <= -6) return 0;
+    const lo = Math.floor(k), f = k - lo;
+    const at = x => x >= 6 ? 1 : x <= -6 ? 0 : _beatT[x + 6];
+    return at(lo) * (1 - f) + at(lo + 1) * f;
+  }
+  function raceM(hm, hp, p, q, pB = p, qB = q, T = 0) {
+    const memo = new Map();
+    const P = (h, g, t) => {                      // player to act
+      if (h <= 0) return 1; if (g <= 0) return 0;
+      const key = (h * 64 + g) * 8 + t; let v = memo.get(key); if (v !== undefined) return v;
+      if (t > 0) v = pB * M(h - 1, g, t) + (1 - pB) * M(h, g, t);
+      else {                                       // no boost: close the no-progress loop exactly
+        const den = 1 - (1 - p) * (1 - q);
+        v = den <= 1e-9 ? 0 : (p * M(h - 1, g, 0) + (1 - p) * q * P(h, g - 1, 0)) / den;
+      }
+      memo.set(key, v); return v;
+    };
+    const M = (h, g, t) => {                      // mob to act; the round ends after it
+      if (h <= 0) return 1; if (g <= 0) return 0;
+      const qq = t > 0 ? qB : q, tn = Math.max(0, t - 1);
+      return qq * P(h, g - 1, tn) + (1 - qq) * P(h, g, tn);
+    };
+    return M(hm, hp, T);
+  }
+  // P(C + d6 − mob C ≥ k)
+  function marginP(c, mobC, k) { const need = mobC + k - c; return need <= 1 ? 1 : need > 6 ? 0 : (7 - need) / 6; }
+  const MOCK_T = 3, ALL6 = ['F','D','A','M','C','V'];
+  function charmRates(ctx, ms, st) {
+    let p = 0;
+    for (const a of ctx.atk) p = Math.max(p, beatP(st[a], ms[DEF[a]] - 3));
+    const defOf = t => t === 'M' && ctx.arcane ? st.A : st[DEF[t]] + (t === 'M' ? ctx.prot : 0);
+    const types = effectiveAttackTypes(ms, ctx.immuneC);
+    let q = 0; for (const t of types) q += beatP(ms[t] - 3, defOf(t)); q /= types.length;
+    return { p, q };
+  }
+  // Best thing to do with a Charisma success of this tier. hm = mob hearts after any Rattle hit.
+  function charmOutcome(ctx, tier, hm) {
+    if (hm <= 0) return { kind:'won', v:1 };
+    const { p, q } = charmRates(ctx, ctx.ms, ctx.st);
+    let best = { kind:'end', v:ctx.endValue };
+    const consider = (o, ms, st) => { const r = charmRates(ctx, ms, st); const v = raceM(hm, ctx.hp, p, q, r.p, r.q, MOCK_T); if (v > best.v) best = { ...o, v }; };
+    if (tier >= 3 && ctx.rattle) return { kind:'kill', v:1 };
+    for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++) {          // Swap
+      const a = ALL6[i], b = ALL6[j]; if (ctx.ms[a] === ctx.ms[b]) continue;
+      consider({ kind:'swap', s1:a, s2:b }, { ...ctx.ms, [a]:ctx.ms[b], [b]:ctx.ms[a] }, ctx.st);
+    }
+    if (tier >= 2) for (const s of ALL6) consider({ kind:'malus', stat:s }, { ...ctx.ms, [s]:Math.max(0, ctx.ms[s] - 3.5) }, ctx.st);
+    if (tier >= 3) for (const s of ALL6) consider({ kind:'bonus', stat:s }, ctx.ms, { ...ctx.st, [s]:ctx.st[s] + 3.5 });
+    return best;
+  }
+  // Attack or Talk? ctx: { st, C, ms, hm, hp, atk, arcane, prot, immuneC, rattle, endValue }
+  const _charmMemo = new Map();
+  function charmDecide(ctx) {
+    const key = `${JSON.stringify(ctx.st)}|${ctx.C}|${JSON.stringify(ctx.ms)}|${ctx.hm}|${ctx.hp}|${ctx.rattle}|${ctx.endValue}|${ctx.atk.join('')}|${ctx.arcane}|${ctx.immuneC}`;
+    const hit = _charmMemo.get(key); if (hit) return hit;
+    const { p, q } = charmRates(ctx, ctx.ms, ctx.st);
+    const wAtt = p * raceM(ctx.hm - 1, ctx.hp, p, q) + (1 - p) * raceM(ctx.hm, ctx.hp, p, q);
+    const P1 = marginP(ctx.C, ctx.ms.C, 1), P3 = marginP(ctx.C, ctx.ms.C, 3), P5 = marginP(ctx.C, ctx.ms.C, 5), P7 = marginP(ctx.C, ctx.ms.C, 7);
+    let res = { bard:false, wAtt, wTalk:0 };
+    if (P3 > 0 || (ctx.rattle && P1 > 0)) {
+      const hmS = ctx.rattle ? ctx.hm - 1 : ctx.hm;                         // Rattle: every success hits
+      const still = raceM(ctx.hm, ctx.hp, p, q);
+      const near = hmS <= 0 ? 1 : raceM(hmS, ctx.hp, p, q);
+      const wTalk = (1 - P1) * still + (P1 - P3) * near
+        + (P3 - P5) * charmOutcome(ctx, 1, hmS).v + (P5 - P7) * charmOutcome(ctx, 2, hmS).v + P7 * charmOutcome(ctx, 3, hmS).v;
+      res = { bard: wTalk > wAtt + 0.005, wAtt, wTalk };
+    }
+    if (_charmMemo.size > 200000) _charmMemo.clear();
+    _charmMemo.set(key, res);
+    return res;
+  }
+
   // One simulated fight. Returns { win, heartsLeft, healsUsed }
   function simOnce(snap, mobTpl) {
     const st = { ...snap.st };
@@ -218,6 +310,7 @@ const BotAI = (() => {
     const spells = snap.spells.slice(); let fires = [], stunned = false, bloodKill = false;
     const base = { ...mobTpl.stats };
     let mal = [];                        // {stat, v, left}
+    let buffs = [], near = 0;            // Charisma: our +d6 bonuses {stat, v, left}; near-miss C bonus
     const ms = { ...base };
     const recompute = () => { for (const k in base) ms[k] = base[k]; for (const m of mal) ms[m.stat] = Math.max(0, ms[m.stat] - m.v); };
     let mhp = mobTpl.hearts.max ?? mobTpl.hearts.current;
@@ -231,6 +324,24 @@ const BotAI = (() => {
           if (c) { curses--; mal.push({ stat:c, v:d6(), left:4 }); recompute(); }
         }
         if (snap.garrote && mhp <= 2) return { win:true, heartsLeft:hp, healsUsed };   // Garrote execute (F, no roll)
+        if (snap.charm) {
+          const ctx = { st, C: st.C + near, ms, hm: mhp, hp: hp + heals, atk: snap.atk, arcane: snap.arcane, prot: snap.prot,
+                        immuneC: snap.immuneC, rattle: snap.rattle, endValue: mobTpl.isBoss ? 0.02 : 0.9 };
+          if (charmDecide(ctx).bard) {
+            const margin = ctx.C + d6() - ms.C;
+            if (margin >= 1 && snap.rattle && --mhp <= 0) return { win:true, heartsLeft:hp, healsUsed };
+            if (margin >= 3) {
+              const o = charmOutcome(ctx, margin >= 7 ? 3 : margin >= 5 ? 2 : 1, mhp);
+              if (o.kind === 'kill' || o.kind === 'won') return { win:true, heartsLeft:hp, healsUsed };
+              if (o.kind === 'end') return { win:!mobTpl.isBoss, heartsLeft:hp, healsUsed, ended:true };
+              const dur = d6();
+              if (o.kind === 'swap') { const a = ms[o.s1], b = ms[o.s2]; mal.push({ stat:o.s1, v:a - b, left:dur }, { stat:o.s2, v:b - a, left:dur }); recompute(); }
+              if (o.kind === 'malus') { mal.push({ stat:o.stat, v:d6(), left:dur }); recompute(); }
+              if (o.kind === 'bonus') { const v = d6(); st[o.stat] += v; buffs.push({ stat:o.stat, v, left:dur }); }
+            } else if (margin >= 1) near++;
+            playerTurn = !playerTurn; continue;
+          }
+        }
         const a = bestAttackStat(st, ms, snap.atk);
         let roll = st[a] + d6();
         if (snap.usePots && pots[a].length) roll += pots[a].shift();
@@ -267,8 +378,9 @@ const BotAI = (() => {
           if (snap.thorns && Math.random() < 0.3) { mhp--; if (mhp <= 0) return { win:true, heartsLeft:hp, healsUsed }; }
           else { hp--; if (hp <= 0) return { win:false, heartsLeft:0, healsUsed }; }
         }
-        // end of round: maluses tick
+        // end of round: maluses (and our Charisma bonuses) tick
         if (mal.length) { mal.forEach(m => m.left--); mal = mal.filter(m => m.left > 0); recompute(); }
+        if (buffs.length) { for (const b of buffs) if (--b.left <= 0) st[b.stat] -= b.v; buffs = buffs.filter(b => b.left > 0); }
       }
       playerTurn = !playerTurn;
     }
@@ -291,7 +403,7 @@ const BotAI = (() => {
     const snap = snapshot(p);
     if (hearts != null) snap.hearts = hearts;
     snap.heals = 0;
-    const key = `${p.id}|${tier}|${snap.atk.join('')}|${JSON.stringify(snap.st)}|${snap.hearts}|${snap.kryss}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.thorns}|${snap.fury}|${snap.arcane}`;
+    const key = `${p.id}|${tier}|${snap.atk.join('')}|${JSON.stringify(snap.st)}|${snap.hearts}|${snap.kryss}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.thorns}|${snap.fury}|${snap.arcane}|${snap.charm}|${snap.rattle}`;
     if (_tierCache[key]) return _tierCache[key];
     const pool = MOBS.getByTier(tier).filter(m => !m.isBoss).slice(0, 6);
     let w = 0, hl = 0;
@@ -308,7 +420,7 @@ const BotAI = (() => {
     fake.inventory = inv.concat(extraInv);
     const snap = snapshot(fake, { usePots:true });
     snap.hearts = snap.maxHearts;
-    const key = `${mobId}|${n}|${snap.garrote}|${snap.kryss}|${snap.flame}|${snap.immuneC}|${snap.atk.join('')}|${snap.spells.map(x => x.id).sort().join(',')}|${snap.tome}|${snap.smokes}|${JSON.stringify(snap.st)}|${JSON.stringify(snap.pots)}|${snap.heals}|${snap.curses}|${JSON.stringify(snap.bloods)}|${snap.arcane}|${snap.prot}|${snap.thorns}|${snap.fury}|${snap.hawk}|${snap.maxHearts}`;
+    const key = `${mobId}|${n}|${snap.garrote}|${snap.kryss}|${snap.flame}|${snap.immuneC}|${snap.atk.join('')}|${snap.spells.map(x => x.id).sort().join(',')}|${snap.tome}|${snap.smokes}|${JSON.stringify(snap.st)}|${JSON.stringify(snap.pots)}|${snap.heals}|${snap.curses}|${JSON.stringify(snap.bloods)}|${snap.arcane}|${snap.prot}|${snap.thorns}|${snap.fury}|${snap.hawk}|${snap.maxHearts}|${snap.charm}|${snap.rattle}`;
     if (_bossCache[key] != null) return _bossCache[key];
     return (_bossCache[key] = simFight(snap, MOBS.getMob(mobId), n).winP);
   }
@@ -464,12 +576,14 @@ const BotAI = (() => {
     const m = M(p);
     if (!m.profile) {
       let k = p.botStrategy ?? defaultStrategy;
-      if (k && typeof k === 'object') { m.tune = { ...DEFAULT_TUNE, ...(k.tune ?? {}) }; k = k.base ?? 'auto'; }
+      let genomeTune = null;
+      if (k && typeof k === 'object') { genomeTune = k.tune ?? {}; k = k.base ?? 'auto'; }
       if (k === 'auto' || !PROFILES[k]) {
         const b = p.baseStats;
         k = b.M > Math.max(b.F, b.D) ? 'M' : b.D >= b.F ? 'D' : 'F';
       }
       m.profile = PROFILES[k];
+      if (genomeTune || m.profile.tune) m.tune = { ...DEFAULT_TUNE, ...(m.profile.tune ?? {}), ...(genomeTune ?? {}) };
       if (m.profile.main === 'auto') {
         const main = p.baseStats.D >= p.baseStats.F ? 'D' : 'F';
         m.profile = { ...m.profile, main, ...BASE_WEAPON[main], fallback: main };
@@ -517,6 +631,7 @@ const BotAI = (() => {
     };
     if (pr.guildExtra && pr.extraFirst && !has(pr.guildExtra)) list.push({ where:'guild', id:pr.guildExtra });
     if (pr.beast && itemVal(eq.charisma, 'C') < 3 && !has('lute') && !has('accordion')) list.push({ where:'shop', id:'lute' });
+    const charmInstrument = pr.charm && pr.guildExtra !== 'cursed_rattle';
     if (pr.needsSpell && !p.canAttackMagic()) list.push({ where:'master', buySpell:'bang', cost:10 });
     if (pr.guildWeapon) {
       if (!has(pr.weapon)) list.push({ where:'guild', id:pr.weapon });
@@ -528,6 +643,7 @@ const BotAI = (() => {
       if (wantWEnch) list.push({ where:'master', enchant:wench, slot:wslot, cost: ENCHANTMENTS.find(e => e.id === wench).cost });
       if (tn.pegasus && !has('pegasus') && itemVal(eq.speed, 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
     }
+    if (charmInstrument && itemVal(eq.charisma, 'C') < 6 && !has('accordion')) list.push({ where:'shop', id:'accordion', minTier:6 });
     if (!has('hv_armor') && itemVal(eq.armor, 'A') < 6) list.push({ where:'shop', id:'hv_armor', minTier:4 });
     if (tn.shield && !has('lg_shield') && itemVal(eq.shield, 'A') < 3) list.push({ where:'shop', id:'lg_shield', minTier:2 });
     if (!speedEarly && wantWEnch) list.push({ where:'master', enchant:wench, slot:wslot, cost: ENCHANTMENTS.find(e => e.id === wench).cost });
@@ -540,7 +656,8 @@ const BotAI = (() => {
       list.push({ where:'master', enchant: arc ? 'arcane' : 'resistance', slot:'armor', cost:50 });
     }
     if (tn.shieldRes && eq.shield && !eq.shield.enchantment) list.push({ where:'master', enchant:'resistance', slot:'shield', cost:50 });
-    if (tn.accordion && !has('accordion') && itemVal(eq.charisma, 'C') < 6) list.push({ where:'shop', id:'accordion', minTier:6 });
+    const guildInCharisma = pr.guildExtra && getItem(pr.guildExtra)?.slot === 'charisma';   // e.g. the Rattle owns the slot
+    if (tn.accordion && !guildInCharisma && !has('accordion') && itemVal(eq.charisma, 'C') < 6) list.push({ where:'shop', id:'accordion', minTier:6 });
     if (tn.cloak && !has('invis_cloak') && !cloakSoldOut()) list.push({ where:'guild', id:'invis_cloak', cost:100 });
     if (tn.rope && !has('rope')) list.push({ where:'shop', id:'rope' });
     // PvP kit (only matters with rivals alive): chains to stop escapes, invisibility to escape
@@ -950,7 +1067,7 @@ const BotAI = (() => {
       case 'armor':     return item.id === 'invis_cloak' ? (wantCloak(p) && !M(p).bossMode ? 100 : -100) : (b.A ?? 0) + (b.V ?? 0) * 0.3 + (item.enchantment ? 2 : 0);
       case 'shield':    return (b.A ?? 0) + (item.enchantment ? 2 : 0);
       case 'speed':     return item.id === profile(p).guildExtra && !M(p).bossMode ? 100 : (b.V ?? 0);
-      case 'charisma':  return (b.C ?? 0) * 0.5;
+      case 'charisma':  return item.id === profile(p).guildExtra ? 100 : (b.C ?? 0) * 0.5;
       case 'magic':     return item.id === profile(p).guildExtra && !M(p).bossMode ? 100 : (b.M ?? 0) * 0.3;
     }
     return -INF;   // slots we don't use
@@ -1238,13 +1355,54 @@ const BotAI = (() => {
     return false;
   }
 
+  // ── Charisma in real fights ─────────────────────────────────────────────────
+  function charmCtx(p, c) {
+    const st = Object.fromEntries(ALL6.map(s => [s, p.getStat(s)]));
+    return { st, C: st.C, ms: currentMobStats(c.mob), hm: c.mob.hearts.current,
+             hp: p.hearts.current + p.inventory.filter(x => x === 'pot_heal').length,
+             atk: attackTypes(p), arcane: p.hasEnchantment('arcane'), prot: p._equippedDefenseSpell?.()?.armorValue ?? 0,
+             immuneC: p.hasEquipped('blowpipe'), rattle: p.hasEquipped('cursed_rattle'), endValue: c.isBoss ? 0.02 : 0.9 };
+  }
+  const itemWorth = id => { const it = getItem(id); return it?.buyPrice ?? (it?.statBonus ? 40 : 15); };
+  // Ending the encounter: Learn > heal when hurt > the most valuable of trade / gift / steal
+  function charmEndAction(p, c, maxTier) {
+    if (maxTier >= 3 && (p.dialogueSkillsGained ?? 0) < 4) return { family:'respect', tier:3 };
+    if (maxTier >= 2 && p.hearts.current <= p.hearts.max - 2) return { family:'friendly', tier:2 };
+    const zone = Math.min(3, Math.max(0, c.mob.tier ?? 0));
+    const loot = c.charismaResult?.pendingLoot?.items ?? [];
+    const opts = [];
+    const dt = Math.min(3, maxTier);
+    opts.push({ v: 3.5 * [0, 3, 5, 8][dt] * [1, 2, 3, 4][zone] * (p.hasEquipped('con_artist_hat') ? 2 : 1), a: { family:'deceive', tier:dt } });
+    if (loot.length) {
+      const avg = loot.reduce((t, id) => t + itemWorth(id), 0) / loot.length;
+      opts.push({ v: avg * Math.min(loot.length, [1, 1, 2, 2][zone]), a: { family:'friendly', tier:1 } });
+      const best = loot.slice().sort((a, b) => itemWorth(b) - itemWorth(a))[0];
+      const junk = p.inventory.filter(id => !keepItem(p, id)).sort((a, b) => itemWorth(a) - itemWorth(b))[0] ?? null;
+      opts.push({ v: itemWorth(best) - (junk ? itemWorth(junk) * 0.5 : 0), a: { family:'respect', tier:1, mobItemId: best, playerItemId: junk } });
+    }
+    return opts.sort((a, b) => b.v - a.v)[0].a;
+  }
+  function charmPick(p, c) {
+    const maxTier = Combat.charismaMaxTier(c.charismaResult?.diff ?? 0);
+    if (maxTier < 1) return { retreat:true };
+    const o = charmOutcome(charmCtx(p, c), maxTier, c.mob.hearts.current);
+    switch (o.kind) {
+      case 'kill':  return { family:'kill', tier:1 };
+      case 'swap':  return { family:'mock', tier:1, stat1:o.s1, stat2:o.s2 };
+      case 'malus': return { family:'mock', tier:2, stat:o.stat };
+      case 'bonus': return { family:'mock', tier:3, stat:o.stat };
+      default:      return charmEndAction(p, c, maxTier);
+    }
+  }
+
   function combatTurn(p, state) {
     const c = state.pendingCombat;
     if (!c) return;
     const sub = c.combatSubPhase;
     const big = c.isBoss;                                   // spend potions on bosses
     if (profile(p).beast && beastCombat(p, c)) return;
-    if (sub === 'charisma_pick') return act({ type:'charisma_outcome', retreat:true });
+    const charm = !!(profile(p).charm || tune(p).charm);
+    if (sub === 'charisma_pick') return act({ type:'charisma_outcome', ...(charm ? charmPick(p, c) : { retreat:true }) });
     if (sub === 'friend_fighting') return act({ type:'friend_round' });
     if (sub === 'friend_died')     return act({ type:'friend_take_over' });
 
@@ -1282,6 +1440,13 @@ const BotAI = (() => {
       const active = new Set((c.mob.statusEffects ?? []).filter(e => e.type === 'malus').map(e => e.stat));
       const cs = curseChoice(st, currentMobStats(c.mob), p.hasEnchantment('arcane'), active, attackTypes(p), p.hasEquipped('blowpipe'));
       if (cs) return act({ type:'use_curse', stat:cs });
+    }
+    // Charmers: Talk when it beats Attacking (the model also decides what to do with a success)
+    if (charm && !c.pvp && charmDecide(charmCtx(p, c)).bard) {
+      if (!p.hasTempBonus('C') && marginP(p.getStat('C'), currentMobStats(c.mob).C, 3) < 1) {
+        const pot = bestPot(p, 'C'); if (pot) return act({ type:'use_item', itemId:pot });
+      }
+      return act({ type:'bard' });
     }
     const atk = chooseCombatAction(p, c.mob, big);
     if (big && !p.hasTempBonus(atk.attackType)) {
@@ -1630,5 +1795,5 @@ const BotAI = (() => {
   function getStrategy(p) { return profile(p).name; }
 
   return { takeTurn, chooseCombatAction, getPhase, configure, getStrategy, pvpTick,
-           _debug: { bossLoadout, withBossLoadout, friendDragonP, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
+           _debug: { bossLoadout, withBossLoadout, friendDragonP, raceM, beatP, charmDecide, charmOutcome, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
 })();

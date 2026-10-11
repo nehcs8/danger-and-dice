@@ -11,7 +11,7 @@
 const fs = require('fs'), path = require('path'), { fork } = require('child_process');
 const { makeSandbox, get } = require('./lib_sb.js');
 
-const ALL_STRATS = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB','BM'];
+const ALL_STRATS = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB','BM','CH','CR'];
 const STAT_KEYS = ['F','D','A','M','C','V'];
 
 // ════════════════════════════════════════════════════════════════════════════
