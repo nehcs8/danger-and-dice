@@ -172,7 +172,7 @@ const MOBS = (() => {
         0), isBoss:true },
 
     // principessa handled by game.js on death; dragon_blood×10 + 10 healing potions (for the escort), 100×d6 coins
-    { ...mob('dragon',       'Dragon',          3, 20,20,20,20,20,20, 12,
+    { ...mob('dragon',       'Dragon',          3, 22,22,22,22,22,22, 12,
         [{itemId:'dragon_blood', count:10}, {itemId:'pot_heal', count:10}],
         0, 100), isBoss:true },
 
@@ -193,9 +193,9 @@ const MOBS = (() => {
       { adj: 'Feeble', domStat:  6, otherStat: 2, hearts: 1, tier: 0 },
       { adj: 'Weak',   domStat: 10, otherStat: 3, hearts: 1, tier: 0 },
       { adj: 'Wild',   domStat: 14, otherStat: 4, hearts: 1, tier: 1 },
-      { adj: 'Rabid',  domStat: 19, otherStat: 5, hearts: 2, tier: 1 },
-      { adj: 'Fierce', domStat: 25, otherStat: 7, hearts: 2, tier: 2 },
-      { adj: 'Savage', domStat: 32, otherStat: 9, hearts: 2, tier: 3 },
+      { adj: 'Rabid',  domStat: 18, otherStat: 5, hearts: 2, tier: 1 },
+      { adj: 'Fierce', domStat: 21, otherStat: 7, hearts: 2, tier: 2 },
+      { adj: 'Savage', domStat: 24, otherStat: 9, hearts: 2, tier: 3 },
     ];
     const SPECIES = [
       { id: 'bear',    name: 'Bear',    dom: 'F'    },
