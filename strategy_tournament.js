@@ -4,14 +4,14 @@
 // a summary report.
 //
 // Usage:
-//   node strategy_tournament.js [--workers 8] [--max-turns 1600] [--strategies F,D,...] [--limit N] [--out dir]
+//   node strategy_tournament.js [--workers 8] [--max-turns 1600] [--strategies F,D,...] [--require BM] [--limit N] [--out dir]
 //   node strategy_tournament.js --replay <seed> <S1,S2,S3,S4> [--max-turns 1600]   → full log of one game to stdout
 //   node strategy_tournament.js --report <dir>                                    → rebuild summary from games.jsonl
 'use strict';
 const fs = require('fs'), path = require('path'), { fork } = require('child_process');
 const { makeSandbox, get } = require('./lib_sb.js');
 
-const ALL_STRATS = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB'];
+const ALL_STRATS = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB','BM'];
 const STAT_KEYS = ['F','D','A','M','C','V'];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -334,6 +334,7 @@ if (process.argv[2] === '--worker') {
   const workers = +arg('workers', require('os').cpus().length);
   const maxTurns = +arg('max-turns', 1600);
   let tasks = buildTasks(strats);
+  if (arg('require')) tasks = tasks.filter(t => t.lineup.includes(arg('require')));   // only line-ups with this strategy
   if (arg('limit')) tasks = tasks.slice(0, +arg('limit'));
   const out = arg('out', path.join('results', `tournament_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`));
   fs.mkdirSync(out, { recursive: true });

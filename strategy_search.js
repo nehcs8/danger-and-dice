@@ -14,7 +14,7 @@ const fs = require('fs'), path = require('path'), { fork } = require('child_proc
 const { makeSandbox, get } = require('./lib_sb.js');
 
 const CAP = 250;
-const BASES = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB'];
+const BASES = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB','BM'];
 const SPACE = {
   shield: [true, false], shieldRes: [true, false], armorEnch: [true, false],
   pegasus: [true, false], accordion: [true, false], cloak: [true, false], rope: [true, false],
@@ -48,7 +48,7 @@ function describe(g) {
 
 // ── one solo game, stopped at the dragon kill ──────────────────────────────
 // inspect(Game, BotAI, player): optional hook run at the end, for debugging probes
-function runSolo(genome, seed, inspect = null) {
+function runSolo(genome, seed, inspect = null, onLog = null) {
   const sb = makeSandbox('js/engine/bot_v2.js', [], seed);
   const Game = get(sb, 'Game'), BotAI = get(sb, 'BotAI'), KB = get(sb, 'KingBattle'), Ph = Game.Phase;
   const queue = [];
@@ -72,6 +72,7 @@ function runSolo(genome, seed, inspect = null) {
   Game.on('item_unequipped',  () => { if (!done && inShop()) kick(); });
   Game.on('skill_upgraded',   () => { if (!done) kick(); });
   Game.on('enchanted',        () => { if (!done) kick(); });
+  if (onLog) Game.on('log', d => onLog(`[T${turns}] ${BotAI.getPhase(Game.getCurrentPlayer())} ${d.message}`));
   Game.on('dragon_defeated',  () => { done = 'dragon'; });
   let killer = null;
   Game.on('player_defeated',  () => { done = 'dead'; killer = Game.getState().pendingCombat?.mob?.id ?? null; });

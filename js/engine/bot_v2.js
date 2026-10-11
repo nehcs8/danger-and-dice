@@ -44,6 +44,9 @@ const BotAI = (() => {
     SS: { name:'SS', main:'auto', guildExtra:'stealth_shoes', extraFirst:true, escapeFarming:true,
           slots:['W','armor','shield','speed','charisma'] },
     // Bottomless Bag: double item drops (potions, blood) → dragon kit comes from loot. Accordion for bosses.
+    // Beastmaster: befriend a "?" animal with Charisma, let it land the killing blows until it
+    // evolves to Savage, then send it at the dragon and keep it alive with heal potions.
+    BM: { name:'BM', main:'auto', beast:true },
     BB: { name:'BB', main:'auto', guildExtra:'bottomless_bag',
           slots:['W','armor','shield','speed','magic'], bossSlots:['W','armor','shield','speed','charisma'] },
   };
@@ -64,6 +67,9 @@ const BotAI = (() => {
     bosses: true,               // hunt normal bosses whose drops raise our dragon odds (King excluded: no battle model yet)
     bossGo: 0.9,                // fight a boss at this simulated win probability
     bossGain: 0.08,             // …if its drops raise our dragon win probability by at least this much
+    beastFriends: 2,            // Beastmaster: animal friends to keep (one to train, one as dragon backup)
+    befriendMinP: 0.17,         // Beastmaster: try Charisma on an animal when P(margin ≥ 7) is at least this
+    beastGo: 0.95,              // Beastmaster: send the friends at the dragon at this win probability (heals are cheap)
   };
   function tune(p) { const m = M(p); if (!m.profile) profile(p); return m.tune ?? DEFAULT_TUNE; }
 
@@ -308,6 +314,54 @@ const BotAI = (() => {
   }
   function dragonWinP(p, extraInv = [], n = 600) { return mobWinP(p, 'dragon', extraInv, n); }
 
+  // ── Friends (Beastmaster) ───────────────────────────────────────────────────
+  const animalFriends = p => (p.friendsList ?? []).filter(f => f.isAnimal);
+  const friendPower = f => Math.max(f.stats.F, f.stats.D, f.stats.M, f.stats.C);
+  const isSavage = f => /_savage$/.test(f.id);
+  function bestFriend(p, pred = () => true) {
+    return animalFriends(p).filter(pred).sort((a, b) => friendPower(b) - friendPower(a) || b.hearts.current - a.hearts.current)[0] ?? null;
+  }
+  // P(friend's attack hits this mob) — friend and mob both roll stat − 3 + d6 (combat.js resolveFriendRound)
+  function friendHitP(f, ms) {
+    const top = Math.max(f.stats.F, f.stats.D, f.stats.M, f.stats.C);
+    const types = ['F','D','M','C'].filter(t => f.stats[t] === top);
+    let p = 0;
+    for (const t of types) { let w = 0; for (let a = 1; a <= 6; a++) for (let b = 1; b <= 6; b++) if (top + a > ms[DEF[t]] + b) w++; p += w / 36; }
+    return p / types.length;
+  }
+  // P(C + d6 − mob C ≥ 7): Charisma befriend (friendly tier 3)
+  function befriendP(p, mob) {
+    const need = (currentMobStats(mob).C ?? 0) + 7 - p.getStat('C');
+    return Math.max(0, Math.min(1, (7 - Math.max(1, need)) / 6));
+  }
+  // Dragon fought by our animal friends only (best first, next one when it falls),
+  // healing the deployed friend whenever it is down to its last heart.
+  const _friendCache = {};
+  function friendDragonP(p, extraHeals = 0, n = 400) {
+    const fr = animalFriends(p).slice().sort((a, b) => friendPower(b) - friendPower(a));
+    if (!fr.length) return 0;
+    const heals = p.inventory.filter(x => x === 'pot_heal').length + extraHeals;
+    const key = `${fr.map(f => JSON.stringify(f.stats) + f.hearts.max).join('|')}|${heals}`;
+    if (_friendCache[key] != null) return _friendCache[key];
+    const d = MOBS.getMob('dragon'), ds = d.stats;
+    const dTypes = ['F','D','M','C'].filter(t => ds[t] === Math.max(ds.F, ds.D, ds.M, ds.C));
+    let wins = 0;
+    for (let i = 0; i < n; i++) {
+      let dh = d.hearts.max, h = heals, k = 0, fh = fr[0].hearts.max;
+      while (k < fr.length) {
+        const f = fr[k], top = friendPower(f), ft = ['F','D','M','C'].filter(t => f.stats[t] === top);
+        const at = ft[Math.floor(Math.random() * ft.length)];
+        if (top - 3 + d6() > ds[DEF[at]] - 3 + d6() && --dh <= 0) { wins++; break; }
+        const mt = dTypes[Math.floor(Math.random() * dTypes.length)];
+        if (ds[mt] - 3 + d6() > f.stats[DEF[mt]] - 3 + d6()) {
+          if (--fh <= 0) { k++; fh = fr[k]?.hearts.max ?? 0; continue; }
+        }
+        if (fh === 1 && f.hearts.max > 1 && h > 0) { h--; fh++; }
+      }
+    }
+    return (_friendCache[key] = wins / n);
+  }
+
   // ── Boss hunting ────────────────────────────────────────────────────────────
   // Normal bosses drop gear that can make the dragon winnable. The King is excluded until
   // there is a model of the King battle (simulations auto-win it).
@@ -367,7 +421,7 @@ const BotAI = (() => {
   // targets: [{x,y,bias}] — bias added to that source (lower = more attractive)
   function field(p, targets, assumeCloak = false) {
     const dist = new Float64Array(W * H).fill(INF);
-    const cloak = assumeCloak || p.hasEquipped('invis_cloak') || !!p.invisibleThisTurn;
+    const cloak = assumeCloak || p.hasEquipped('invis_cloak') || !!p.invisibleThisTurn || !!p.invisPotion;
     const occupied = pvpOccupied(p);
     const secret = hasSecret(p);
     const safeT = cloak ? 3 : safeMinibossTier(p);
@@ -462,6 +516,7 @@ const BotAI = (() => {
       for (const s0 of tn.skillOrder.split(',')) { const s = s0 === 'main' ? ms : s0; if (p.baseStats[s] < 6) { list.push({ where:'master', skill:s, cost:50 }); break; } }
     };
     if (pr.guildExtra && pr.extraFirst && !has(pr.guildExtra)) list.push({ where:'guild', id:pr.guildExtra });
+    if (pr.beast && itemVal(eq.charisma, 'C') < 3 && !has('lute') && !has('accordion')) list.push({ where:'shop', id:'lute' });
     if (pr.needsSpell && !p.canAttackMagic()) list.push({ where:'master', buySpell:'bang', cost:10 });
     if (pr.guildWeapon) {
       if (!has(pr.weapon)) list.push({ where:'guild', id:pr.weapon });
@@ -565,6 +620,9 @@ const BotAI = (() => {
       case 'stage':    return [goal.tile];
       case 'princess': { const pr = Game.getState().princess; return [{ x:pr.x, y:pr.y }]; }
       case 'dragon':   return [bossPos('dragon')];
+      case 'catch': {
+        return tilesOf(TileType.RANDOM_EVENT).filter(t => !p.hasUsedTile(t.x, t.y) && zoneAt(t.x, t.y) <= 1);
+      }
       case 'boss':     return [bossPos(goal.id)];
       case 'heal':     return tilesOf(TileType.FIRE);
       case 'bar':      return tilesOf(TileType.BAR);
@@ -592,6 +650,15 @@ const BotAI = (() => {
     return [];
   }
 
+  // Dragon go-threshold with hysteresis: once on the way, a little estimate noise must not turn
+  // us back (bots got stranded next to the dragon behind minibosses); stranded with no shop
+  // or Master reachable, take a fair chance instead of waiting forever.
+  function dragonBar(p, go) {
+    const m = M(p);
+    if (!reachableFrom(p, tilesOf(TileType.SHOP)) && !reachableFrom(p, tilesOf(TileType.MASTER))) return Math.min(go, 0.5);
+    return m.goal?.kind === 'dragon' ? go - 0.1 : go;
+  }
+
   function* goalCandidates(p) {
     const st = Game.getState();
     const m  = M(p);
@@ -602,6 +669,13 @@ const BotAI = (() => {
       if (p.hearts.current >= Math.min(3, p.hearts.max)) yield { kind:'hunt' };
     }
     if (!st.pvpActive) { const sg = stagingGoal(p); if (sg) yield sg; }
+    // stranded near the dragon (no shop or Master reachable, e.g. after a potion trip):
+    // whatever is still on the shopping list can't be bought — take the fight at a fair chance
+    if (!st.dragonDefeated && !reachableFrom(p, tilesOf(TileType.SHOP)) && !reachableFrom(p, tilesOf(TileType.MASTER))
+        && reachableFrom(p, [bossPos('dragon')])) {
+      const wp = Math.max(withBossLoadout(p, () => dragonWinP(p, [], 300)), profile(p).beast ? friendDragonP(p) : 0);
+      if (wp >= 0.5) yield { kind:'dragon', winP:wp };
+    }
 
     // Heal when low (fire is free)
     // Heal when down 2+ hearts: all safety checks use *current* hearts, so at 3/5 almost
@@ -612,6 +686,29 @@ const BotAI = (() => {
         const hg = healGoal(p);
         if (hg) yield hg;
       }
+    }
+
+    // Beastmaster: the dragon is fought by the friends — ready when they win often enough with our heals
+    const pr0 = profile(p), tn0 = tune(p);
+    if (pr0.beast && !st.dragonDefeated) {
+      const best = bestFriend(p);
+      if (best && isSavage(best)) {
+        const fw = friendDragonP(p);
+        m.lastDragonP = fw;
+        if (fw >= dragonBar(p, tn0.beastGo)) {
+          // the dragon sits behind tier-3 minibosses: without the cloak we can't get there
+          const hasCloak = p.hasItem('invis_cloak') || p.hasEquipped('invis_cloak');
+          if (!hasCloak && !cloakSoldOut() && !reachableFrom(p, [bossPos('dragon')])) {
+            if (p.coins >= getItem('invis_cloak').buyPrice) yield { kind:'guild', what:{ where:'guild', id:'invis_cloak' } };
+          }
+          // the friend fights; we only need to survive the dragon's opening attack
+          if (p.hearts.current <= 2) { const hg = healGoal(p); if (hg) yield hg; }
+          yield { kind:'dragon', winP:fw };
+        } else if (p.coins >= 50 && friendDragonP(p, Math.floor(p.coins / 50)) > fw) yield { kind:'shop', items:['pot_heal'], beastKit:true };
+      }
+      // no friend yet: go looking for an animal on "?" tiles in zones 0–1 (a backup friend is
+      // befriended opportunistically). Needs a Charisma instrument first.
+      if (animalFriends(p).length === 0 && itemVal(p.equipped.charisma, 'C') >= 3) yield { kind:'catch' };
     }
 
     // Shopping list (gear, enchants, skills, cloak, rope)
@@ -634,13 +731,13 @@ const BotAI = (() => {
       let wp = withBossLoadout(p, () => dragonWinP(p, [], 300));
       if (wp >= go - 0.05) wp = withBossLoadout(p, () => dragonWinP(p, [], 1500));   // confirm: avoid charging in on a lucky estimate
       m.lastDragonP = wp;
-      if (wp >= go) {
+      if (wp >= dragonBar(p, go)) {
         if (p.hearts.current < p.hearts.max) yield { kind:'heal' };
         yield { kind:'dragon', winP:wp };
       }
       // not ready: a boss whose drops would help, and which we can beat now
       const tn = tune(p);
-      if (tn.bosses) {
+      if (tn.bosses && !profile(p).beast) {
         const opts = bossOptions(p).filter(b => b.gain >= tn.bossGain && b.win >= tn.bossGo).sort((a, b) => b.gain - a.gain);
         for (const b of opts) {
           if (p.hearts.current < p.hearts.max) yield { kind:'heal' };
@@ -688,18 +785,43 @@ const BotAI = (() => {
     let last = null;
     const hasCloak = p.hasItem('invis_cloak') || p.hasEquipped('invis_cloak');
     m.cloakNeeded = false;
+    m.potionTrip = false;
     for (const g of goalCandidates(p)) {
       if ((m.goalBan[goalKey(g)] ?? -1) > m.turns) continue;
       last = g;
       const tg = goalTargets(p, g);
       if (!tg.length) continue;
       if (reachableFrom(p, tg, RUSH.has(g.kind) && hasCloak)) return g;
+      // no cloak: Invisibility Potions get us past one miniboss each — set out only with
+      // enough of them for every miniboss on the route (else we get stranded half-way)
+      if (RUSH.has(g.kind) && !hasCloak && reachableFrom(p, tg, true)) {
+        const need = minibossesOnRoute(p, tg), have = p.inventory.filter(x => x === 'pot_invis').length + (p.invisPotion | 0);
+        if (have >= need) { m.potionTrip = true; return g; }
+        const potionShop = { kind:'shop', items:['pot_invis'], potion:true, need };
+        if (p.coins >= getItem('pot_invis').buyPrice * (need - have) && reachableFrom(p, goalTargets(p, potionShop))) return potionShop;
+      }
       // only reachable past minibosses we can't fight (e.g. coming back from a boss): wear the cloak
       if (hasCloak && !RUSH.has(g.kind) && reachableFrom(p, tg, true)) { m.cloakNeeded = true; return g; }
     }
     return last ?? { kind:'earn' };
   }
 
+  // Uncleared minibosses on the route to targets when sneaking past all of them (follows the
+  // potential field downhill) — how many Invisibility Potions the trip needs.
+  function minibossesOnRoute(p, targets) {
+    const f = field(p, targets, true), sec = hasSecret(p);
+    let i = p.position.y * W + p.position.x, n = 0;
+    for (let step = 0; step < 400 && f[i] > 0; step++) {
+      const x = i % W, y = (i / W) | 0;
+      let best = -1, bv = f[i];
+      for (const nb of MapGrid.getAdjacent(x, y, sec)) { const j = nb.y * W + nb.x; if (f[j] < bv) { bv = f[j]; best = j; } }
+      if (best < 0) break;
+      i = best;
+      const bx = i % W, by = (i / W) | 0;
+      if (MapGrid.get(bx, by) === TileType.MINIBOSS && !p.hasUsedTile(bx, by)) n++;
+    }
+    return n;
+  }
   function reachableFrom(p, targets, assumeCloak = false) {
     if (!targets.length) return false;
     const d = field(p, targets, assumeCloak);
@@ -754,7 +876,7 @@ const BotAI = (() => {
     const pvpAdj = pvpLandingAdjust(p, x, y, goal);
     if (pvpAdj != null) return pvpAdj;
     const used = p.hasUsedTile(x, y);
-    const cloak = p.hasEquipped('invis_cloak');
+    const cloak = p.hasEquipped('invis_cloak') || !!p.invisPotion;
     const coinStep = 0.15;                                 // 1 coin ≈ 0.15 step
     switch (t) {
       case TileType.MINIBOSS: {
@@ -769,6 +891,7 @@ const BotAI = (() => {
       }
       case TileType.RANDOM_EVENT: {
         if (used) return 0;
+        if (goal.kind === 'catch') return -15;
         const z = zoneAt(x, y);
         const w = tierWinP(p, z, p.hearts.current);
         if (RUSH.has(goal.kind)) return 30;
@@ -914,7 +1037,7 @@ const BotAI = (() => {
   // Items worth keeping in inventory
   function keepItem(p, id) {
     if (id === 'pot_heal' || id === 'invis_cloak' || id === 'rope' || id === 'compass' || id === 'sp_curse' || id === 'sp_smoke') return true;
-    if (id === 'chain' || id === 'sp_invisibility' || id === 'sp_teleport') return true;
+    if (id === 'chain' || id === 'sp_invisibility' || id === 'sp_teleport' || id === 'pot_invis') return true;
     if (ATTACK_SPELLS.has(id)) return mainStat(p) === 'M';
     if (id === profile(p).weapon) return true;
     if (p.hasEquipped('invis_cloak') && getItem(id)?.slot === 'armor') return true;
@@ -971,6 +1094,12 @@ const BotAI = (() => {
       const need = p.hearts.max - p.hearts.current - p.inventory.filter(x => x === 'pot_heal').length;
       if (need > 0 && p.coins >= 50) return act({ type:'buy', itemId:'pot_heal' });
     }
+    // Invisibility Potions for a trip past minibosses without the cloak
+    if (M(p).goal?.potion && avail('pot_invis') && p.coins >= getItem('pot_invis').buyPrice
+        && p.inventory.filter(x => x === 'pot_invis').length < Math.min(6, M(p).goal.need ?? 1)) return act({ type:'buy', itemId:'pot_invis' });
+    // Beastmaster: heal potions for the friends' dragon fight
+    if (M(p).goal?.beastKit && avail('pot_heal') && p.coins >= 50 && friendDragonP(p) < Math.max(tune(p).kitTarget, tune(p).beastGo + 0.02)
+        && p.inventory.filter(x => x === 'pot_heal').length < 24) return act({ type:'buy', itemId:'pot_heal' });
     // dragon kit
     if (shoppingList(p).length === 0) {
       const plan = cachedPlan(p);
@@ -1042,17 +1171,85 @@ const BotAI = (() => {
     return best;
   }
 
+  // Beastmaster: heal potions are the Savage friend's dragon kit — not for drinking ourselves
+  // (except at 1 heart in a fight).
+  function healsReserved(p) { return profile(p).beast && !!bestFriend(p, isSavage); }
+
+  // Drink a heal potion. With a damaged friend around, the engine asks who to heal and emits no
+  // combat update; returns true when an update was emitted (caller must not act again).
+  function drinkHeal(p, target = 'player') {
+    Game.submitAction({ type:'use_item', itemId:'pot_heal' });
+    if (!Game.getState().pendingHealItemId) return true;
+    Game.submitAction({ type:'heal_target', target });
+    return false;
+  }
+
+  // Beastmaster decisions inside a fight. Returns true if it acted.
+  function beastCombat(p, c) {
+    const sub = c.combatSubPhase, mob = c.mob, tn = tune(p);
+    const dragon = mob.id === 'dragon';
+    if (sub === 'charisma_pick') {
+      const maxTier = Combat.charismaMaxTier(c.charismaResult?.diff ?? 0);
+      if (maxTier >= 3 && mob.isAnimal && (p.friendsList?.length ?? 0) < 4) { act({ type:'charisma_outcome', family:'friendly', tier:3 }); return true; }
+      // not enough to befriend: weaken the mob and keep talking next turn
+      const ms = currentMobStats(mob), atkT = mobAttackTypes(ms)[0];
+      if (maxTier >= 2) { act({ type:'charisma_outcome', family:'mock', tier:2, stat:atkT }); return true; }
+      if (maxTier >= 1) {
+        const low = ['F','D','M','C','A','V'].filter(s => s !== atkT).sort((a, b) => ms[a] - ms[b])[0];
+        act({ type:'charisma_outcome', family:'mock', tier:1, stat1:atkT, stat2:low }); return true;
+      }
+      return false;
+    }
+    if (sub === 'friend_fighting') {
+      const f = c.deployedFriend;
+      if (f && f.hearts.current === 1 && f.hearts.max > 1 && p.hasItem('pot_heal')) drinkHeal(p, f.uid);
+      act({ type:'friend_round' }); return true;
+    }
+    if (sub === 'friend_died') {
+      const f = dragon ? bestFriend(p, isSavage) : null;
+      act(f ? { type:'deploy_friend', uid:f.uid } : { type:'friend_take_over' }); return true;
+    }
+    if (sub !== 'player_attack') return false;
+    // dragon: the friends fight it
+    if (dragon) {
+      // only a Savage can hurt it; weaker friends would just die
+      const f = bestFriend(p, isSavage);
+      if (f) { act({ type:'deploy_friend', uid:f.uid }); return true; }
+      // no Savage left: fight it ourselves only if we came ready for that, else get out.
+      // Decided once per fight — the estimate drops as curses get used up.
+      c.botSelfFight ??= dragonWinP(p, [], 300) >= tn.dragonGo;
+      if (c.botSelfFight) return false;
+      if (p.canEscape()) { act({ type:'bail' }); return true; }
+      return false;
+    }
+    if (c.isBoss) return false;
+    // catch: talk to animals while we want more friends
+    // (weak animals only: talking to a strong one while it hits us is how Beastmasters died)
+    if (mob.isAnimal && (mob.tier ?? 0) <= 1 && animalFriends(p).length < tn.beastFriends && befriendP(p, mob) >= tn.befriendMinP) {
+      if (befriendP(p, mob) < 1 && !p.hasTempBonus('C')) { const pot = bestPot(p, 'C'); if (pot) { act({ type:'use_item', itemId:pot }); return true; } }
+      act({ type:'bard' }); return true;
+    }
+    // train: let a non-savage friend land the killing blow (evolution needs friend kills)
+    if (mob.hearts.current <= 1) {
+      const ms = currentMobStats(mob);
+      const f = animalFriends(p).filter(x => !isSavage(x)).sort((a, b) => friendHitP(b, ms) - friendHitP(a, ms))[0];
+      if (f && friendHitP(f, ms) >= 0.75) { act({ type:'deploy_friend', uid:f.uid }); return true; }
+    }
+    return false;
+  }
+
   function combatTurn(p, state) {
     const c = state.pendingCombat;
     if (!c) return;
     const sub = c.combatSubPhase;
     const big = c.isBoss;                                   // spend potions on bosses
+    if (profile(p).beast && beastCombat(p, c)) return;
     if (sub === 'charisma_pick') return act({ type:'charisma_outcome', retreat:true });
     if (sub === 'friend_fighting') return act({ type:'friend_round' });
     if (sub === 'friend_died')     return act({ type:'friend_take_over' });
 
     if (sub === 'mob_attack') {
-      if (p.hearts.current === 1 && p.hasItem('pot_heal')) return act({ type:'use_item', itemId:'pot_heal' });
+      if (p.hearts.current === 1 && p.hasItem('pot_heal') && drinkHeal(p)) return;
       const t = c.mobNextAttackType;
       if (big && t) {
         const ds = t === 'M' && p.hasEnchantment('arcane') ? 'A' : DEF[t];
@@ -1304,6 +1501,10 @@ const BotAI = (() => {
 
   // ── before the dragon falls: get in position when a rival is about to kill it ─
   function stagingGoal(p) {
+    const m = M(p);
+    m.stageTurns = m.goal?.kind === 'stage' ? (m.stageTurns ?? 0) + 1 : 0;
+    if (m.stageTurns > 10) { m.stageBanUntil = m.turns + 30; m.stageTurns = 0; }
+    if ((m.stageBanUntil ?? -1) > m.turns) return null;
     if (!rivalsAlive(p) || !p.hasItem('sp_teleport')) return null;
     const dr = bossPos('dragon'); if (!dr) return null;
     const close = rivals(p).some(q => Math.abs(q.position.x - dr.x) + Math.abs(q.position.y - dr.y) <= 3);
@@ -1351,15 +1552,16 @@ const BotAI = (() => {
       case P.ROLL_MOVE: {
         // all non-roll actions here are synchronous and do not need re-triggering
         // drink heal potions outside combat when low — unless they are the dragon kit
-        const saving = shoppingList(player).length === 0 && !Game.getState().pvpActive;
-        while (player.hearts.current <= 2 && player.hasItem('pot_heal') && !saving) Game.submitAction({ type:'use_item', itemId:'pot_heal' });
-        if (m.goal?.heal) while (player.hearts.current < player.hearts.max && player.hasItem('pot_heal')) Game.submitAction({ type:'use_item', itemId:'pot_heal' });
+        const reserved = healsReserved(player);
+        const saving = (shoppingList(player).length === 0 && !Game.getState().pvpActive) || reserved;
+        while (player.hearts.current <= 2 && player.hasItem('pot_heal') && !saving) drinkHeal(player);
+        if (m.goal?.heal && !reserved) while (player.hearts.current < player.hearts.max && player.hasItem('pot_heal')) drinkHeal(player);
         // PvP: the carrier (dragon drop: 10 healing potions) and hunters top up before moving
         if (Game.getState().pvpActive && (player.hasPrincess || carrier(player)))
-          while (player.hearts.current < player.hearts.max - (player.hasPrincess ? 0 : 1) && player.hasItem('pot_heal')) Game.submitAction({ type:'use_item', itemId:'pot_heal' });
+          while (player.hearts.current < player.hearts.max - (player.hasPrincess ? 0 : 1) && player.hasItem('pot_heal')) drinkHeal(player);
         // last resort: stuck on an idle goal while damaged → drink from the kit
-        if (['refresh','earn'].includes(m.goal?.kind) && m.sameGoalTurns >= 6)
-          while (player.hearts.current < player.hearts.max && player.hasItem('pot_heal')) Game.submitAction({ type:'use_item', itemId:'pot_heal' });
+        if (['refresh','earn'].includes(m.goal?.kind) && m.sameGoalTurns >= 6 && !reserved)
+          while (player.hearts.current < player.hearts.max && player.hasItem('pot_heal')) drinkHeal(player);
         // no-progress detector: same goal, distance not improving for 8 turns → ban it for 15 turns
         if (m.goal) {
           const k = goalKey(m.goal);
@@ -1374,6 +1576,14 @@ const BotAI = (() => {
         m.turns++;
         m.bossMode = false;
         for (let k = 0; k < 12; k++) { const eq = equipStep(player); if (!eq) break; Game.submitAction(eq); }
+        // potions stack (one miniboss each): drink enough for the minibosses on the route
+        if (m.potionTrip && player.hasItem('pot_invis')) {
+          const tg = goalTargets(player, m.goal), i = player.position.y * W + player.position.x;
+          if (tg.length && field(player, tg)[i] - field(player, tg, true)[i] >= 3) {
+            const need = minibossesOnRoute(player, tg);
+            while ((player.invisPotion | 0) < need && player.hasItem('pot_invis')) Game.submitAction({ type:'use_item', itemId:'pot_invis' });
+          }
+        }
         if (pvpPreMove(player)) return;      // used a teleport (turn continues in TELEPORT_CHOICE)
         return act({ type:'roll' });
       }
@@ -1420,5 +1630,5 @@ const BotAI = (() => {
   function getStrategy(p) { return profile(p).name; }
 
   return { takeTurn, chooseCombatAction, getPhase, configure, getStrategy, pvpTick,
-           _debug: { bossLoadout, withBossLoadout, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
+           _debug: { bossLoadout, withBossLoadout, friendDragonP, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
 })();
