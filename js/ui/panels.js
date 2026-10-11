@@ -110,6 +110,7 @@ const Panels = (() => {
     });
 
     Game.on('item_used', () => {
+      if (!humanInvolved()) return;
       if (Game.getState().phase === Game.Phase.COMBAT) {
         refreshCombatConsumables();
         refreshCombatPlayerStats();
@@ -117,17 +118,17 @@ const Panels = (() => {
       }
     });
 
-    Game.on('heal_target_pending', data => showHealTargetModal(data));
+    Game.on('heal_target_pending', data => { if (humanInvolved()) showHealTargetModal(data); });
 
     // Refresh master panel after skill purchase or enchant
     Game.on('skill_upgraded', () => {
-      if (Game.getState().phase === Game.Phase.MASTER) {
+      if (humanInvolved() && Game.getState().phase === Game.Phase.MASTER) {
         showMaster({});
         HUD.update({});
       }
     });
     Game.on('enchanted', () => {
-      if (Game.getState().phase === Game.Phase.MASTER) {
+      if (humanInvolved() && Game.getState().phase === Game.Phase.MASTER) {
         showMaster({});
         HUD.update({});
       }
@@ -135,7 +136,7 @@ const Panels = (() => {
 
     Game.on('combat_update', data => {
       const logEl = _el('combat-log');
-      if (!logEl) return;
+      if (!logEl || !humanInvolved()) return;
       if (data.pvp) { pvpCombatUpdate(data); return; }
       const emitColor = data.logType === 'curse' ? '#c470e0'
                       : data.logType === 'bard'  ? '#ffd080'
@@ -205,10 +206,19 @@ const Panels = (() => {
     });
   }
 
+  // A human takes part in what is on screen: the current player, or a PvP duellist.
+  // Bot-only phases get no popups — the bot banner and the turn log show what happens.
+  function humanInvolved() {
+    if (Game.getCurrentPlayer()?.isBot === false) return true;
+    const ids = Game.getState().pendingPvp?.ids ?? [];
+    return Game.getPlayers().some(p => ids.includes(p.id) && !p.isBot);
+  }
+
   // ── Phase dispatcher ──────────────────────────────────────────────────────
   function handlePhase(data) {
     hideAll();
     HUD.update(data);
+    if (!humanInvolved()) return;
 
     switch (data.phase) {
       case Game.Phase.SETUP_ROLL:
@@ -1051,6 +1061,7 @@ const Panels = (() => {
 
   // ── Shop ──────────────────────────────────────────────────────────────────
   function refreshShop() {
+    if (!humanInvolved()) return;
     showShop({ guildType: currentShopGuildType });
     HUD.update({});
   }
@@ -1258,6 +1269,7 @@ const Panels = (() => {
   }
 
   function refreshMaster() {
+    if (!humanInvolved()) return;
     showMaster({});
     HUD.update({});
   }

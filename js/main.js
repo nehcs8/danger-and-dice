@@ -71,6 +71,7 @@
     Panels.init();
     bindGameEvents();
     Game.init(players, selectedDifficulty);
+    Activity.init();
     Renderer.draw();
 
     // Stats tracking always active; speed controls only revealed in all-bot spectate mode
@@ -129,10 +130,6 @@
           setTimeout(() => BotAI.takeTurn(player), botDelay());
         }
       }
-    });
-
-    Game.on('log', data => {
-      HUD.appendLog(data.message, data.turn);
     });
 
     Game.on('player_moved',    () => Renderer.draw());
@@ -199,10 +196,7 @@
 
     Game.on('item_used', () => HUD.update({}));
 
-    Game.on('xp_levelup', data => {
-      HUD.appendLog(`[XP] ${data.player}: ${data.stat} reaches ${data.newValue} via experience!`);
-      HUD.update({});
-    });
+    Game.on('xp_levelup', () => HUD.update({}));
 
     $('btn-open-inventory').addEventListener('click', () => HUD.openInventoryPopup());
     $('btn-close-inventory').addEventListener('click', () => HUD.closeInventoryPopup());
@@ -272,6 +266,10 @@
     }
 
     $('map-canvas').addEventListener('mousemove', e => {
+      // player token → detail card
+      const who = Renderer.playerAt(e.offsetX, e.offsetY);
+      Activity.hoverToken(who, e.clientX, e.clientY);
+      if (who) { tooltip.style.display = 'none'; return; }
       const coords = Renderer.coordsAt(e.offsetX, e.offsetY);
       if (!coords || MapGrid.get(coords.x, coords.y) !== TileType.BOSS) {
         tooltip.style.display = 'none';
@@ -299,6 +297,7 @@
     });
     $('map-canvas').addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
+      Activity.hoverToken(null);
     });
   }
 

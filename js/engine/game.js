@@ -496,6 +496,9 @@ const Game = (() => {
       emit('error', { message: 'Invalid destination' });
       return;
     }
+    // The path actually walked (UI trail); computed before potions are spent
+    const moveFrom = { ...player.position };
+    const movePath = Movement.pathTo(player.position, dest, state.movementCap, player) ?? [{ ...dest }];
     // Destination only reachable by slipping past minibosses: one Invisibility Potion each
     const potionsUsed = player.invisPotion ? (state.reachableTiles.potionUse?.get(destKey) ?? 0) : 0;
     if (potionsUsed > 0) {
@@ -514,7 +517,8 @@ const Game = (() => {
       if (stopTile) {
         player.position = { ...stopTile };
         player.markTileUsed(stopTile.x, stopTile.y);
-        emit('player_moved', { player: player.name, position: stopTile });
+        const upToStop = movePath.slice(0, movePath.findIndex(t => t.x === stopTile.x && t.y === stopTile.y) + 1);
+        emit('player_moved', { player: player.name, position: stopTile, from: moveFrom, path: upToStop.length ? upToStop : [stopTile] });
 
         const roll = Dice.d6();
         log(`${player.name} hits Stop at (${stopTile.x},${stopTile.y}) — rolls ${roll}`);
@@ -526,7 +530,8 @@ const Game = (() => {
           log(`${player.name} breaks free!`);
           if (stopTile.x !== dest.x || stopTile.y !== dest.y) {
             player.position = { ...dest };
-            emit('player_moved', { player: player.name, position: dest });
+            const afterStop = movePath.slice(movePath.findIndex(t => t.x === stopTile.x && t.y === stopTile.y) + 1);
+            emit('player_moved', { player: player.name, position: dest, from: { ...stopTile }, path: afterStop.length ? afterStop : [dest] });
           }
           if (maybeStartPvp(player)) return;
           if (state.pvpActive && !state.princess.carriedBy) pickUpPrincess(player);
@@ -539,7 +544,7 @@ const Game = (() => {
     const tilesWalked = state.reachableTiles.get(destKey) ?? 0;
     player.position = { ...dest };
     log(`${player.name} → (${dest.x},${dest.y}) [roll ${state.movementCap}]`);
-    emit('player_moved', { player: player.name, position: dest });
+    emit('player_moved', { player: player.name, position: dest, from: moveFrom, path: movePath });
     player.gainXP('V', tilesWalked / 10);
     player.gainXP('A', Math.min(2, tilesWalked / calcInventoryWeight(player)));
 

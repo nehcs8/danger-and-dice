@@ -62,12 +62,16 @@ Danger and Dice/
         │                   #   obstacles, unit tokens, reachable highlights, LoS shadow).
         ├── king_panel.js   # KingPanel IIFE: weapon-assign screen, battle UI, planning timer,
         │                   #   canvas click/hover, standalone team editor.
-        └── spectate.js     # SpectateStats IIFE: per-player metrics (coins, kills, statSum, items),
-                            #   milestone tracking, canvas line charts, game-over recap, run export.
+        ├── spectate.js     # SpectateStats IIFE: per-player metrics (coins, kills, statSum, items),
+        │                   #   milestone tracking, canvas line charts, game-over recap, run export.
+        └── activity.js     # Activity IIFE: per-player turn summaries from engine events (path,
+                            #   fights, loot, purchases, coins/hearts delta) → turn-grouped log with
+                            #   player filters, players strip + hover/pinned detail cards, bot banner,
+                            #   last-turn paths for the map trails.
 ```
 
 **Script load order in index.html (must be preserved):**
-`dice → items → mobs → map → player → movement → combat → king_battle → game → bot_v2 → renderer → hud → panels → king_renderer → king_panel → spectate → main`
+`dice → items → mobs → map → player → movement → combat → king_battle → game → bot_v2 → renderer → hud → panels → king_renderer → king_panel → spectate → activity → main`
 
 ---
 
@@ -261,6 +265,19 @@ After Dragon dies, Princess appears at Dragon's tile. PVP is active.
 - Killing every other player does **not** end the game; the survivor must still carry the Princess to the FINISH tile.
 - PVP uses the normal combat panel (no separate UI). Combat log shows newest lines on top.
 - Any player who steps on Princess's tile picks her up (`hasPrincess = true`).
+- A duel that lasts 40 full rounds ends as a draw: nobody dies, both stay where they are.
+
+### Invisibility Potion
+`pot_invis` (30 coins): drink it out of combat, before or after rolling. Each potion lets you sneak past ONE
+uncleared miniboss, like the Invisibility Cloak: walk past it, or land on it and choose Sneak Past. Potions
+stack (drink 2 → pass 2) and stay active until used. `Movement.getReachable()` searches one layer per potion
+and exposes `potionUse` (potions needed per tile); the move spends that many. Potion-only tiles are drawn violet.
+
+### UI with bots
+Modals open only when a human is involved (the current player, or a PvP duellist); bot turns are shown by the
+bot banner over the map, the players strip and the turn log. The left panel follows the human player (read-only
+during other players' turns); in an all-bot game it follows the current player. `player_moved` carries
+`from` and the walked `path`; the map draws each player's last-turn path in their colour.
 
 ### Death
 Player with 0 hearts: `isAlive = false`, removed from turn rotation. Drops all inventory and equipped items (loot pool for killer). If last player alive dies, game over.

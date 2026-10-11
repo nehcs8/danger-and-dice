@@ -1,9 +1,6 @@
 // HUD — updates the left panel (stats, hearts, coins) and the log.
 
 const HUD = (() => {
-  const MAX_LOG = 2000;
-  const logEntries = [];
-  let _lastTurnSeen = 0;
 
   function stackItems(ids) {
     const counts = new Map();
@@ -24,10 +21,6 @@ const HUD = (() => {
   }
 
   function init() {
-    logEntries.length = 0;
-    _lastTurnSeen = 0;
-    const list = document.getElementById('log-list');
-    if (list) list.innerHTML = '';
     buildLegend();
     update({});
   }
@@ -66,24 +59,37 @@ const HUD = (() => {
     ).join('');
   }
 
+  // The panel follows the human player when there is one (bots are followed through the
+  // players strip, hover cards and turn log); in an all-bot game it follows the current player.
+  let _lastHuman = null;
+  function focusPlayer() {
+    const cur = Game.getCurrentPlayer();
+    if (cur && !cur.isBot) { _lastHuman = cur.id; return cur; }
+    const humans = Game.getPlayers().filter(p => !p.isBot);
+    return humans.find(p => p.id === _lastHuman) ?? humans.find(p => p.isAlive) ?? humans[0] ?? cur;
+  }
+
   function update(data) {
-    const player = Game.getCurrentPlayer();
+    const cur    = Game.getCurrentPlayer();
+    const player = focusPlayer();
     if (!player) return;
 
     const phase = data.phase ?? Game.getState().phase;
+    const readOnly = player !== cur || player.isBot;  // someone else's turn / a bot: look, don't touch
 
     _el('player-name-display').textContent = player.name + (player.isBot ? ' 🤖' : '');
     _el('hearts-display').innerHTML  = heartsHTML(player.hearts);
-    _el('coins-display').textContent = `💰 ${player.coins}`;
+    _el('coins-display').textContent = `💰 ${player.coins}` + (player.invisPotion ? `  👻×${player.invisPotion}` : '');
     _el('stats-display').innerHTML   = statsHTML(player);
-    _el('equipped-display').innerHTML = equippedHTML(player, false);
-    _el('turn-info').textContent     = phaseLabel(phase);
-    _el('inventory-list').innerHTML  = inventoryHTML(player, phase);
-    _el('other-players-display').innerHTML = otherPlayersHTML(player, Game.getPlayers());
+    _el('equipped-display').innerHTML = equippedHTML(player, readOnly);
+    _el('turn-info').textContent     = readOnly ? `⏳ ${cur?.name ?? '—'}'s turn — ${phaseLabel(phase)}` : phaseLabel(phase);
+    _el('inventory-list').innerHTML  = inventoryHTML(player, phase, readOnly);
+    _el('other-players-display').innerHTML = '';
+    _el('btn-open-inventory').disabled = readOnly;
 
     const rollBtn = _el('btn-roll');
     const blocked = phase === Game.Phase.STOP_BLOCKED;
-    rollBtn.disabled  = phase !== Game.Phase.ROLL_MOVE && !blocked;
+    rollBtn.disabled  = readOnly || (phase !== Game.Phase.ROLL_MOVE && !blocked);
     rollBtn.textContent = blocked ? 'End Turn (Blocked)' : 'Roll Movement';
 
     refreshInventoryPopup();
@@ -162,7 +168,7 @@ const HUD = (() => {
 
   const COMBAT_ONLY_SPELLS = new Set(['sp_invisibility','sp_transmutation','sp_smoke']);
 
-  function inventoryHTML(player, phase) {
+  function inventoryHTML(player, phase, readOnly = false) {
     const inCombat = phase === Game.Phase.COMBAT || phase === Game.Phase.PVP_COMBAT;
     // Only show non-equipment items; equipment is managed via the popup
     const ids = player.inventory.filter(id => !getItem(id)?.slot);
@@ -173,9 +179,9 @@ const HUD = (() => {
       const label = name + (count > 1 ? ` ×${count}` : '');
       const isCombatOnly = COMBAT_ONLY_SPELLS.has(id);
       const eff = item?.effect;
-      const usable = !isCombatOnly && (
+      const usable = !readOnly && !isCombatOnly && (
         item?.statBonus ||
-        (eff && typeof eff === 'object' && (eff.type === 'heal' || eff.stat != null)) ||
+        (eff && typeof eff === 'object' && (eff.type === 'heal' || eff.type === 'skip_fight' || eff.stat != null)) ||
         (typeof eff === 'string' && eff === 'teleport')
       );
       let useBtn = '';
@@ -269,26 +275,6 @@ const HUD = (() => {
     Game.submitAction({ type: 'use_item', itemId });
   }
 
-  function otherPlayersHTML(currentPlayer, allPlayers) {
-    const others = allPlayers.filter(p => p.id !== currentPlayer.id);
-    if (!others.length) return '';
-    return `<div>
-      <h4 class="other-players-header">Other Players</h4>
-      ${others.map(p => {
-        const idx = allPlayers.indexOf(p);
-        const hFull  = p.hearts.current;
-        const hEmpty = p.hearts.max - hFull;
-        const heartsStr = '❤'.repeat(hFull) + '🖤'.repeat(hEmpty);
-        const deadStyle = p.isAlive ? '' : 'opacity:0.45;';
-        return `<div class="other-player-card" style="${deadStyle}" onclick="HUD.showPlayerInfo(${idx})">
-          <span class="other-player-name">${p.name}${p.isBot ? ' 🤖' : ''}${!p.isAlive ? ' ☠' : ''}</span>
-          <span class="other-player-hearts">${heartsStr}</span>
-          <span class="other-player-coins">💰 ${p.coins}</span>
-        </div>`;
-      }).join('')}
-    </div>`;
-  }
-
   function showPlayerInfo(playerIdx) {
     const p = Game.getPlayers()[playerIdx];
     if (!p) return;
@@ -354,28 +340,8 @@ const HUD = (() => {
     return labels[phase] ?? '';
   }
 
-  function appendLog(message, turn) {
-    logEntries.push(message);
-    if (logEntries.length > MAX_LOG) logEntries.shift();
-    const list = _el('log-list');
-
-    const div = document.createElement('div');
-    div.className   = 'log-entry';
-    div.textContent = message;
-    list.insertBefore(div, list.firstChild);
-
-    // Insert a turn milestone marker every 10 turns (below the new entry)
-    if (turn != null && turn > 0) {
-      const milestone = Math.floor(turn / 10) * 10;
-      if (milestone > 0 && Math.floor(turn / 10) > Math.floor(_lastTurnSeen / 10)) {
-        _lastTurnSeen = turn;
-        const marker = document.createElement('div');
-        marker.className = 'log-turn-marker';
-        marker.textContent = `── Turn ${milestone} ──`;
-        list.insertBefore(marker, div.nextSibling);
-      }
-    }
-  }
+  // The turn log is rendered by Activity now; kept so older callers don't break.
+  function appendLog() {}
 
   function _el(id) { return document.getElementById(id); }
 

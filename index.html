@@ -75,7 +75,13 @@
 
         <!-- Centre: map canvas -->
         <div id="map-container">
-          <canvas id="map-canvas"></canvas>
+          <!-- Every player at a glance: hover for details, click to pin -->
+          <div id="players-strip"></div>
+          <div id="map-wrap">
+            <canvas id="map-canvas"></canvas>
+            <!-- What the bot on turn is doing (bot turns show no popups) -->
+            <div id="bot-banner"></div>
+          </div>
           <div id="tile-tooltip"></div>
         </div>
 
@@ -90,7 +96,8 @@
             <div id="inventory-list"></div>
           </div>
           <div id="log-display">
-            <h3>Log</h3>
+            <h3>Log <span class="log-hint">click a turn for details</span></h3>
+            <div id="log-filters"></div>
             <div id="log-list"></div>
           </div>
         </div>
@@ -98,6 +105,9 @@
       </div>
 
     </div>
+
+    <!-- Player detail card (players strip / map token hover) -->
+    <div id="player-card"></div>
 
     <!-- ── Overlay modals ────────────────────────────────────── -->
     <div id="overlay" class="hidden">
@@ -429,6 +439,7 @@
   <script src="js/ui/king_renderer.js"></script>
   <script src="js/ui/king_panel.js"></script>
   <script src="js/ui/spectate.js"></script>
+  <script src="js/ui/activity.js"></script>
   <script src="js/main.js"></script>
 
 </body>
