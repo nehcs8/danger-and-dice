@@ -415,6 +415,17 @@ node engine_sim.js         # Run F/D/M/C builds, measure XP per turn
 
 Both `sim_v2.js` and `engine_sim.js` must pass before committing.
 
+**Strategy / balance tools** (all seeded and reproducible; output in `results/`, which is gitignored):
+```bash
+node strategy_tournament.js                     # all 330 4-bot line-ups of the 11 strategies, 8 workers (~30 min)
+node strategy_tournament.js --replay <seed> <S1,S2,S3,S4>   # full log of one tournament game
+node strategy_search.js --eval '{"base":"F","tune":{...}}'  # solo race to the dragon on 100 fresh seeds
+node strategy_search.js --gens 8                # evolutionary search over bot tunables (DEFAULT_TUNE in bot_v2.js)
+node dragon_analysis.js                         # what the dragon fight requires (gear ablation, kit value)
+node balance_analysis.js                        # dragon level × boss gear × Beastmaster × Charisma kill what-ifs
+```
+`lib_sb.js` loads the engine into one function scope inside a vm context (10–25× faster than plain vm globals) and takes an optional seed. In simulations the King battle is stubbed as an automatic win, so bots must not target the King until it has a model.
+
 ---
 
 ## Important Warnings for Future Sessions
