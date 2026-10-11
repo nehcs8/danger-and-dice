@@ -2093,9 +2093,11 @@ const Game = (() => {
     dead.isAlive = false;
     // winner takes everything
     const loot = { coins: dead.coins, items: [] };
-    for (const slot of Object.keys(dead.equipped)) { const it = dead.equipped[slot]; if (it) { loot.items.push(it.id); dead.equipped[slot] = null; } }
+    for (const slot of Object.keys(dead.equipped)) { const it = dead.equipped[slot]; if (it) { loot.items.push(it.id); dead.equipped[slot] = null;
+      if (it.enchantment) (winner.storedEnchantments[it.id] ??= []).push(it.enchantment); } }
     loot.items.push(...dead.inventory);
-    dead.inventory = []; dead.coins = 0;
+    for (const [id, list] of Object.entries(dead.storedEnchantments)) (winner.storedEnchantments[id] ??= []).push(...list);
+    dead.inventory = []; dead.storedEnchantments = {}; dead.coins = 0;
     winner.coins += loot.coins;
     for (const id of loot.items) winner.addItem(id);
     pvpLog(`☠ ${dead.name} is slain by ${winner.name}! ${winner.name} takes ${loot.coins} coins and ${loot.items.length} items`);

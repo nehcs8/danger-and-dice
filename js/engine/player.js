@@ -20,6 +20,7 @@ class Player {
     };
 
     this.inventory      = [];   // item ids (strings)
+    this.storedEnchantments = {}; // itemId → [enchantment] carried by unequipped copies in the inventory
     this.statusEffects  = [];   // { type, stat?, value?, turnsLeft }
     this.friendsList    = [];   // befriended mobs: { id, name, hearts, stats, lootTable }
     this.quests         = [];   // active quests: { type, targetType, count, progress, id }
@@ -140,7 +141,11 @@ class Player {
   equip(item) {
     if (!this.canEquip(item)) return false;
     // Store a per-player copy to avoid mutating the shared catalog object
-    this.equipped[item.slot] = { ...item };
+    const copy = { ...item };
+    // An enchanted copy in the inventory keeps its enchantment when re-equipped
+    const stored = copy.enchantment ? null : this.takeStoredEnchantment(item.id);
+    if (stored) copy.enchantment = stored;
+    this.equipped[item.slot] = copy;
     // Remove only one copy from inventory
     const idx = this.inventory.indexOf(item.id);
     if (idx !== -1) this.inventory.splice(idx, 1);
@@ -152,7 +157,20 @@ class Player {
     if (!item) return false;
     this.equipped[slot] = null;
     this.inventory.push(item.id);
+    if (item.enchantment) (this.storedEnchantments[item.id] ??= []).push(item.enchantment);
     return true;
+  }
+
+  // Best enchantment carried by an unequipped copy of itemId (null if none).
+  storedEnchantment(itemId) {
+    const list = this.storedEnchantments[itemId];
+    return list?.length ? list.reduce((a, b) => ((b.tier ?? 1) > (a.tier ?? 1) ? b : a)) : null;
+  }
+
+  takeStoredEnchantment(itemId) {
+    const best = this.storedEnchantment(itemId);
+    if (best) this.storedEnchantments[itemId].splice(this.storedEnchantments[itemId].indexOf(best), 1);
+    return best;
   }
 
   hasEquipped(itemId) {
@@ -201,6 +219,12 @@ class Player {
     const idx = this.inventory.indexOf(itemId);
     if (idx === -1) return false;
     this.inventory.splice(idx, 1);
+    // plain copies go first: an enchantment is lost only when no plain copy is left
+    const list = this.storedEnchantments[itemId];
+    if (list?.length) {
+      const left = this.inventory.filter(id => id === itemId).length;
+      if (list.length > left) { list.sort((a, b) => (b.tier ?? 1) - (a.tier ?? 1)); list.length = left; }
+    }
     return true;
   }
 

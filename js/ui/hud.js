@@ -229,10 +229,12 @@ const HUD = (() => {
 
       stackItems(matchingIds).forEach(({ id, count }) => {
         const item = getItem(id);
+        const stored = player.storedEnchantment(id);
+        const storedSpan = stored ? ` <span class="enchanted-item">✦ ${stored.name ?? stored.id}</span>` : '';
         const row  = document.createElement('div');
         row.className = 'inv-slot-option';
         row.innerHTML =
-          `<span>${guildItemLabel(item, player) ?? id}${count > 1 ? ` ×${count}` : ''}</span>
+          `<span>${guildItemLabel(item, player) ?? id}${count > 1 ? ` ×${count}` : ''}${storedSpan}</span>
            <button class="inv-equip-btn" ${player.canEquip(item) ? '' : 'disabled'}
              onclick="HUD.tryEquip('${id}')">▲ Equip</button>`;
         section.appendChild(row);
