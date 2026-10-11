@@ -442,7 +442,10 @@ const Game = (() => {
           if (mob) startCombat(mob, false, null, tier);
           else endTileInteraction();
         } else if (action?.type === 'cloak_sneak') {
-          log(`${current().name} slips past ${mob?.name ?? 'the enemy'} unseen (Invisibility Cloak).`);
+          const p = current();
+          const how = p.hasEquipped('invis_cloak') ? 'Invisibility Cloak' : 'Invisibility Potion';
+          if (!p.hasEquipped('invis_cloak')) p.invisPotion = Math.max(0, (p.invisPotion ?? 0) - 1);
+          log(`${p.name} slips past ${mob?.name ?? 'the enemy'} unseen (${how}).`);
           endTileInteraction();
         }
         break;
@@ -492,6 +495,12 @@ const Game = (() => {
     if (!state.reachableTiles.has(destKey)) {
       emit('error', { message: 'Invalid destination' });
       return;
+    }
+    // Destination only reachable by slipping past minibosses: one Invisibility Potion each
+    const potionsUsed = player.invisPotion ? (state.reachableTiles.potionUse?.get(destKey) ?? 0) : 0;
+    if (potionsUsed > 0) {
+      player.invisPotion -= potionsUsed;
+      log(`${player.name} slips past ${potionsUsed} miniboss${potionsUsed > 1 ? 'es' : ''} unseen (Invisibility Potion).`);
     }
 
     // If the destination (or path to it) passes through an uncleared STOP tile,
@@ -587,7 +596,7 @@ const Game = (() => {
         const idx    = rollOrForced() - 1;
         const picked = pool[idx % pool.length] ?? null;
         const spawnedMob = picked ? MOBS.spawn(picked.id) : null;
-        if (player.hasEquipped('invis_cloak') && spawnedMob) {
+        if ((player.hasEquipped('invis_cloak') || player.invisPotion) && spawnedMob) {
           state.pendingCloakMob  = spawnedMob;
           state.pendingCloakTier = tier;
           state.phase = Phase.CLOAK_CHOICE;
@@ -1218,8 +1227,24 @@ const Game = (() => {
       log(`${player.name}: use Curse from the combat consumables menu`); return;
     }
 
-    if (eff === 'skip_fight') {
-      log(`${player.name}: use Invisibility via the Bail button`); return;
+    if (eff === 'skip_fight' || eff?.type === 'skip_fight') {
+      // Invisibility Potion: like the cloak, for ONE uncleared miniboss (passed or landed on)
+      if (state.phase !== Phase.ROLL_MOVE && state.phase !== Phase.MOVING) {
+        log(`${player.name}: drink the Invisibility Potion before moving`); return;
+      }
+      if (player.hasEquipped('invis_cloak')) {
+        log(`${player.name}: already invisible (Invisibility Cloak)`); return;
+      }
+      player.invisPotion = (player.invisPotion ?? 0) + 1;      // stacks: one miniboss per potion
+      player.removeItem(itemId);
+      log(`${player.name} drinks ${item.name} — ${player.invisPotion} miniboss${player.invisPotion > 1 ? 'es' : ''} won't see them`);
+      emit('item_used', { player: player.name, item });
+      if (state.phase === Phase.MOVING) {            // already rolled: widen the reachable tiles
+        state.reachableTiles   = Movement.getReachable(player.position, state.movementCap, player);
+        state.stopBlockedTiles = Movement.getStopBlockedTiles(player.position, state.movementCap, player);
+        emit('state_change', { phase: state.phase, player: player.name, cap: state.movementCap, reachable: state.reachableTiles });
+      }
+      return;
     }
 
     // ── Standard effects ──────────────────────────────────────────────────────
@@ -2080,6 +2105,11 @@ const Game = (() => {
       .filter(e => e.type !== 'malus' || e.turnsLeft > 0);
     pv.active = pvpOpponent(pv.active).id;
     if (pv.active === pv.ids[0]) pv.round++;
+    // stalemate: after PVP_MAX_ROUNDS full rounds the duel ends, nobody dies, both stay put
+    if (pv.round > PVP_MAX_ROUNDS) {
+      pvpLog(`The duel drags on for ${PVP_MAX_ROUNDS} rounds — both fighters back off.`);
+      return endPvp('draw');
+    }
     beginPvpAct();
   }
 
@@ -2108,6 +2138,7 @@ const Game = (() => {
     return true;
   }
 
+  const PVP_MAX_ROUNDS = 40;
   function endPvp(outcome, extra = {}) {
     const pv = state.pendingPvp;
     for (const id of pv.ids) { const p = playerById(id); p.chainedTurns = 0; p.clearFightEffects(); }

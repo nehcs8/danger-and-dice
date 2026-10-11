@@ -33,6 +33,7 @@ class Player {
     this.guildItemLevels = {}; // itemId → { itemLevel:1..6, levelProgress:{ mbUnits, secondaryUnits } }
     this.isAlive        = true;
     this.isSmokeActive  = false; // immune to attacks this turn
+    this.invisPotion    = 0;     // Invisibility Potions drunk: sneak past that many uncleared minibosses (until used)
     this.chainedTurns   = 0;    // turns remaining where player cannot escape
     this.usedTiles          = new Set(); // "x,y" keys of tiles already used this cycle
     this.xp                 = { F:0, D:0, A:0, M:0, C:0, V:0 };

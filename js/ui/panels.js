@@ -1316,10 +1316,12 @@ const Panels = (() => {
     }
   }
 
-  // ── Cloak choice (Invisibility Cloak on MINIBOSS tile) ───────────────────
+  // ── Cloak choice (Invisibility Cloak or Potion on MINIBOSS tile) ─────────
   function showCloakChoice(data) {
     const mob = data.mob;
     showModal('modal-cloak-choice');
+    _el('cloak-choice-title').textContent =
+      Game.getCurrentPlayer()?.hasEquipped('invis_cloak') ? 'Invisibility Cloak' : 'Invisibility Potion (one use)';
     _el('cloak-mob-name').textContent = mob ? mob.name : 'an enemy';
     function closeCloakModal() {
       _el('modal-cloak-choice').classList.add('hidden');
