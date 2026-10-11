@@ -47,6 +47,26 @@ const BotAI = (() => {
     BB: { name:'BB', main:'auto', guildExtra:'bottomless_bag',
           slots:['W','armor','shield','speed','magic'], bossSlots:['W','armor','shield','speed','charisma'] },
   };
+  // Tunable decisions. Defaults reproduce the hand-written behaviour; a strategy can be a
+  // genome { base:'G', tune:{...} } (see strategy_search.js) instead of a profile name.
+  const DEFAULT_TUNE = {
+    shield: true, shieldRes: true, armorEnch: true,   // buy Large Shield / its Resistance / Arcane-or-Resistance on armor
+    pegasus: true, accordion: true, cloak: true, rope: true, pvpKit: true,
+    speedEarly: null,           // null = profile default; true/false forces weapon enchant + Pegasus before armor
+    skills: 5,                  // Master stat points to buy (engine cap: 5, base stat < 6)
+    skillOrder: 'main,A,V',     // priority; 'main' = the profile's attack stat
+    skillsEarly: false,         // buy stat points right after the weapon instead of after Pegasus
+    farmWin: 0.97, farmHearts: 1.3,   // farm the highest tier with winP ≥ farmWin and hearts lost ≤ farmHearts
+    healMissing: 2,             // go heal when down this many hearts
+    dragonGo: 0.85,             // attack the dragon at this simulated win probability
+    kitTarget: 0.9,             // dragon kit planner aims for this win probability
+    stockpileCoins: 250, curseCap: 24,   // buy curses whenever coins ≥ stockpileCoins, up to curseCap
+    bosses: true,               // hunt normal bosses whose drops raise our dragon odds (King excluded: no battle model yet)
+    bossGo: 0.9,                // fight a boss at this simulated win probability
+    bossGain: 0.08,             // …if its drops raise our dragon win probability by at least this much
+  };
+  function tune(p) { const m = M(p); if (!m.profile) profile(p); return m.tune ?? DEFAULT_TUNE; }
+
   const BASE_WEAPON = { F:{ weapon:'halberd', wslot:'strength', weaponEnchant:'sharpness' }, D:{ weapon:'arquebus', wslot:'dexterity', weaponEnchant:'precision' } };
   const ATTACK_SPELLS = new Set(COMBAT_SPELLS.filter(s => s.subtype === 'attack').map(s => s.id));
   let defaultStrategy = 'auto';     // 'auto' | 'F' | 'D' | 'M'
@@ -258,37 +278,72 @@ const BotAI = (() => {
     return { winP: w / n, heartsLost: w ? hl / w : snap.hearts, healsUsed: hu / n };
   }
 
-  // Win probability vs a whole miniboss tier (one of its 6 named mobs at random),
-  // at FULL hearts, without stat potions. Cached per stat-signature.
+  // Win probability (and expected hearts lost) vs a whole miniboss tier (one of its 6 named
+  // mobs at random), without stat potions. Cached per stat-signature.
   const _tierCache = {};
-  function tierWinP(p, tier, hearts = null) {
+  function tierStats(p, tier, hearts = null) {
     const snap = snapshot(p);
     if (hearts != null) snap.hearts = hearts;
     snap.heals = 0;
     const key = `${p.id}|${tier}|${snap.atk.join('')}|${JSON.stringify(snap.st)}|${snap.hearts}|${snap.kryss}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.thorns}|${snap.fury}|${snap.arcane}`;
-    if (_tierCache[key] != null) return _tierCache[key];
-    const pool = MOBS.getByTier(tier).filter(m => !m.isBoss).slice(0, 6);
-    let s = 0; for (const m of pool) s += simFight(snap, m, 120).winP;
-    return (_tierCache[key] = s / pool.length);
-  }
-  function tierStats(p, tier) {      // expected hearts lost per fight too
-    const snap = snapshot(p); snap.heals = 0;
+    if (_tierCache[key]) return _tierCache[key];
     const pool = MOBS.getByTier(tier).filter(m => !m.isBoss).slice(0, 6);
     let w = 0, hl = 0;
     for (const m of pool) { const r = simFight(snap, m, 120); w += r.winP; hl += r.heartsLost; }
-    return { winP: w / pool.length, heartsLost: hl / pool.length };
+    return (_tierCache[key] = { winP: w / pool.length, heartsLost: hl / pool.length });
   }
+  function tierWinP(p, tier, hearts = null) { return tierStats(p, tier, hearts).winP; }
 
-  const _dragonCache = {};
-  function dragonWinP(p, extraInv = [], n = 600) {
+  // Win probability vs a boss (default: the dragon) at full hearts, with our potion policy.
+  const _bossCache = {};
+  function mobWinP(p, mobId, extraInv = [], n = 600) {
     const inv = p.inventory;
     const fake = Object.create(p);
     fake.inventory = inv.concat(extraInv);
     const snap = snapshot(fake, { usePots:true });
     snap.hearts = snap.maxHearts;
-    const key = `${n}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.atk.join('')}|${snap.spells.map(x => x.id).sort().join(',')}|${snap.smokes}|${JSON.stringify(snap.st)}|${JSON.stringify(snap.pots)}|${snap.heals}|${snap.curses}|${JSON.stringify(snap.bloods)}|${snap.arcane}|${snap.thorns}|${snap.fury}`;
-    if (_dragonCache[key] != null) return _dragonCache[key];
-    return (_dragonCache[key] = simFight(snap, MOBS.getMob('dragon'), n).winP);
+    const key = `${mobId}|${n}|${snap.garrote}|${snap.kryss}|${snap.flame}|${snap.immuneC}|${snap.atk.join('')}|${snap.spells.map(x => x.id).sort().join(',')}|${snap.tome}|${snap.smokes}|${JSON.stringify(snap.st)}|${JSON.stringify(snap.pots)}|${snap.heals}|${snap.curses}|${JSON.stringify(snap.bloods)}|${snap.arcane}|${snap.prot}|${snap.thorns}|${snap.fury}|${snap.hawk}|${snap.maxHearts}`;
+    if (_bossCache[key] != null) return _bossCache[key];
+    return (_bossCache[key] = simFight(snap, MOBS.getMob(mobId), n).winP);
+  }
+  function dragonWinP(p, extraInv = [], n = 600) { return mobWinP(p, 'dragon', extraInv, n); }
+
+  // ── Boss hunting ────────────────────────────────────────────────────────────
+  // Normal bosses drop gear that can make the dragon winnable. The King is excluded until
+  // there is a model of the King battle (simulations auto-win it).
+  const HUNT_BOSSES = ['sea_serpent', 'prince', 'grand_sorcerer', 'witch', 'phoenix'];
+  const REF_KIT = [...Array(10).fill('sp_curse'), ...Array(4).fill('pot_heal')];   // odds are compared with a typical kit
+  function enchantFor(p, slot) {
+    const pr = profile(p), id = slot === pr.wslot ? (pr.weaponEnchant ?? 'bloodlust')
+      : slot === 'armor' ? (p.getStat('A') > p.getStat('M') ? 'arcane' : 'resistance')
+      : slot === 'shield' ? 'resistance' : null;
+    const e = id && ENCHANTMENTS.find(x => x.id === id);
+    return e ? { ...e, tier: 1 } : null;
+  }
+  function bossDrops(id) {
+    return (MOBS.getMob(id)?.lootTable ?? []).filter(e => e.itemId).flatMap(e => Array(e.count ?? 1).fill(e.itemId));
+  }
+  // For each boss still alive: its own win probability, and how much its drops (re-enchanted
+  // like ours) would raise the dragon win probability. Cached on our gear/stats/inventory.
+  function bossOptions(p) {
+    const m = M(p), st = Game.getState();
+    const key = `${p.inventory.slice().sort().join(',')}|${Object.values(p.equipped).map(i => i ? i.id + (i.enchantment?.id ?? '') : '-').join(',')}|${['F','D','A','M','C','V'].map(s => p.getStat(s)).join(',')}|${[...st.defeatedBosses].join(',')}|${p.hearts.max}`;
+    if (m.bossOpt?.key === key) return m.bossOpt.list;
+    const base = withBossLoadout(p, () => dragonWinP(p, REF_KIT, 300));
+    const list = [];
+    for (const id of HUNT_BOSSES) {
+      if (st.defeatedBosses.has(id) || !bossPos(id)) continue;
+      const drops = bossDrops(id);
+      const fake = Object.create(p);
+      fake.inventory = p.inventory.concat(drops);
+      fake.storedEnchantments = { ...p.storedEnchantments };
+      for (const d of new Set(drops)) { const it = getItem(d); const e = it?.slot && enchantFor(p, it.slot); if (e) fake.storedEnchantments[d] = [e]; }
+      const after = withBossLoadout(fake, () => dragonWinP(fake, REF_KIT, 300));
+      const win = withBossLoadout(p, () => mobWinP(p, id, [], 300));
+      list.push({ id, gain: after - base, win });
+    }
+    m.bossOpt = { key, list };
+    return list;
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -355,6 +410,7 @@ const BotAI = (() => {
     const m = M(p);
     if (!m.profile) {
       let k = p.botStrategy ?? defaultStrategy;
+      if (k && typeof k === 'object') { m.tune = { ...DEFAULT_TUNE, ...(k.tune ?? {}) }; k = k.base ?? 'auto'; }
       if (k === 'auto' || !PROFILES[k]) {
         const b = p.baseStats;
         k = b.M > Math.max(b.F, b.D) ? 'M' : b.D >= b.F ? 'D' : 'F';
@@ -400,6 +456,11 @@ const BotAI = (() => {
     const eq = p.equipped;
     const wslot = pr.wslot;
     const has = id => p.hasItem(id) || p.hasEquipped(id);
+    const tn = tune(p), speedEarly = tn.speedEarly ?? !!pr.speedEarly;
+    const skillStep = () => {
+      if ((p.masterSkillsBought ?? 0) >= Math.min(5, tn.skills)) return;
+      for (const s0 of tn.skillOrder.split(',')) { const s = s0 === 'main' ? ms : s0; if (p.baseStats[s] < 6) { list.push({ where:'master', skill:s, cost:50 }); break; } }
+    };
     if (pr.guildExtra && pr.extraFirst && !has(pr.guildExtra)) list.push({ where:'guild', id:pr.guildExtra });
     if (pr.needsSpell && !p.canAttackMagic()) list.push({ where:'master', buySpell:'bang', cost:10 });
     if (pr.guildWeapon) {
@@ -407,30 +468,29 @@ const BotAI = (() => {
     } else if (!has(pr.weapon) && itemVal(eq[wslot], ms) < 6) list.push({ where:'shop', id:pr.weapon, minTier:6 });
     const wench = pr.weaponEnchant ?? 'bloodlust';
     const wantWEnch = eq[wslot] && !eq[wslot].enchantment && (itemVal(eq[wslot], ms) >= 6 || eq[wslot].id === pr.weapon);
-    if (pr.speedEarly) {
+    if (tn.skillsEarly) skillStep();
+    if (speedEarly) {
       if (wantWEnch) list.push({ where:'master', enchant:wench, slot:wslot, cost: ENCHANTMENTS.find(e => e.id === wench).cost });
-      if (!has('pegasus') && itemVal(eq.speed, 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
+      if (tn.pegasus && !has('pegasus') && itemVal(eq.speed, 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
     }
     if (!has('hv_armor') && itemVal(eq.armor, 'A') < 6) list.push({ where:'shop', id:'hv_armor', minTier:4 });
-    if (!has('lg_shield') && itemVal(eq.shield, 'A') < 3) list.push({ where:'shop', id:'lg_shield', minTier:2 });
-    if (!pr.speedEarly && wantWEnch) list.push({ where:'master', enchant:wench, slot:wslot, cost: ENCHANTMENTS.find(e => e.id === wench).cost });
+    if (tn.shield && !has('lg_shield') && itemVal(eq.shield, 'A') < 3) list.push({ where:'shop', id:'lg_shield', minTier:2 });
+    if (!speedEarly && wantWEnch) list.push({ where:'master', enchant:wench, slot:wslot, cost: ENCHANTMENTS.find(e => e.id === wench).cost });
     if (pr.guildExtra && !pr.extraFirst && !has(pr.guildExtra)) list.push({ where:'guild', id:pr.guildExtra });
-    if (!has('pegasus') && itemVal(eq.speed, 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
-    if ((p.masterSkillsBought ?? 0) < 5) {
-      for (const s of [ms, 'A', 'V']) if (p.baseStats[s] < 6) { list.push({ where:'master', skill:s, cost:50 }); break; }
-    }
-    if (eq.armor && !eq.armor.enchantment && eq.armor.id === 'hv_armor') {
+    if (tn.pegasus && !has('pegasus') && itemVal(eq.speed, 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
+    if (!tn.skillsEarly) skillStep();
+    if (tn.armorEnch && eq.armor && !eq.armor.enchantment && eq.armor.id !== 'invis_cloak' && itemVal(eq.armor, 'A') >= 6) {
       // Arcane only pays off if Armor beats Magic as a defence (true for F/D, often not for mages)
       const arc = p.getStat('A') > p.getStat('M');
       list.push({ where:'master', enchant: arc ? 'arcane' : 'resistance', slot:'armor', cost:50 });
     }
-    if (eq.shield && !eq.shield.enchantment) list.push({ where:'master', enchant:'resistance', slot:'shield', cost:50 });
-    if (!has('accordion') && itemVal(eq.charisma, 'C') < 6) list.push({ where:'shop', id:'accordion', minTier:6 });
-    if (!has('invis_cloak') && !cloakSoldOut()) list.push({ where:'guild', id:'invis_cloak', cost:100 });
-    if (!has('rope')) list.push({ where:'shop', id:'rope' });
+    if (tn.shieldRes && eq.shield && !eq.shield.enchantment) list.push({ where:'master', enchant:'resistance', slot:'shield', cost:50 });
+    if (tn.accordion && !has('accordion') && itemVal(eq.charisma, 'C') < 6) list.push({ where:'shop', id:'accordion', minTier:6 });
+    if (tn.cloak && !has('invis_cloak') && !cloakSoldOut()) list.push({ where:'guild', id:'invis_cloak', cost:100 });
+    if (tn.rope && !has('rope')) list.push({ where:'shop', id:'rope' });
     // PvP kit (only matters with rivals alive): chains to stop escapes, invisibility to escape
     // or sneak, a teleport to ambush the carrier's route
-    if (rivalsAlive(p)) {
+    if (tn.pvpKit && rivalsAlive(p)) {
       const cnt = id => p.inventory.filter(x => x === id).length;
       if (cnt('chain') < 2)           list.push({ where:'shop', id:'chain' });
       if (cnt('sp_invisibility') < 2) list.push({ where:'master', buySpell:'sp_invisibility', cost:15 });
@@ -483,7 +543,7 @@ const BotAI = (() => {
   function cachedPlan(p) {
     const m = M(p);
     const key = `${Math.floor(p.coins / 50)}|${p.inventory.slice().sort().join(',')}|${['F','D','A','V','C'].map(s => p.getStat(s)).join(',')}`;
-    if (m.plan?.key !== key) m.plan = { key, ...planKit(p, p.coins - 20) };
+    if (m.plan?.key !== key) m.plan = { key, ...planKit(p, p.coins - 20, tune(p).kitTarget) };
     return m.plan;
   }
 
@@ -505,6 +565,7 @@ const BotAI = (() => {
       case 'stage':    return [goal.tile];
       case 'princess': { const pr = Game.getState().princess; return [{ x:pr.x, y:pr.y }]; }
       case 'dragon':   return [bossPos('dragon')];
+      case 'boss':     return [bossPos(goal.id)];
       case 'heal':     return tilesOf(TileType.FIRE);
       case 'bar':      return tilesOf(TileType.BAR);
       case 'master':   return tilesOf(TileType.MASTER);
@@ -545,7 +606,7 @@ const BotAI = (() => {
     // Heal when low (fire is free)
     // Heal when down 2+ hearts: all safety checks use *current* hearts, so at 3/5 almost
     // nothing passes and the bot would stall (seen in run 17: 76 turns at 3 hearts).
-    const lowHP = p.hearts.current <= p.hearts.max - 2;
+    const lowHP = p.hearts.current <= p.hearts.max - tune(p).healMissing;
     if (lowHP || (p.hearts.current < p.hearts.max && m.goal?.kind === 'heal')) {
       if (p.hearts.current < p.hearts.max) {
         const hg = healGoal(p);
@@ -569,17 +630,27 @@ const BotAI = (() => {
 
     // Dragon: gear done + cloak owned
     if (list.length === 0) {
+      const go = tune(p).dragonGo;
       let wp = withBossLoadout(p, () => dragonWinP(p, [], 300));
-      if (wp >= 0.8) wp = withBossLoadout(p, () => dragonWinP(p, [], 1500));   // confirm: avoid charging in on a lucky estimate
+      if (wp >= go - 0.05) wp = withBossLoadout(p, () => dragonWinP(p, [], 1500));   // confirm: avoid charging in on a lucky estimate
       m.lastDragonP = wp;
-      if (wp >= 0.85) {
+      if (wp >= go) {
         if (p.hearts.current < p.hearts.max) yield { kind:'heal' };
         yield { kind:'dragon', winP:wp };
       }
+      // not ready: a boss whose drops would help, and which we can beat now
+      const tn = tune(p);
+      if (tn.bosses) {
+        const opts = bossOptions(p).filter(b => b.gain >= tn.bossGain && b.win >= tn.bossGo).sort((a, b) => b.gain - a.gain);
+        for (const b of opts) {
+          if (p.hearts.current < p.hearts.max) yield { kind:'heal' };
+          yield { kind:'boss', id:b.id, winP:b.win, gain:b.gain };
+        }
+      }
       const plan = withBossLoadout(p, () => cachedPlan(p));
       m.lastPlanP = plan.winP;
-      if (plan.winP < 0.85 && wantStockpile(p)) yield { kind:'master', what:{ stockpile:true } };
-      if (plan.kit.length && plan.winP >= 0.85) {
+      if (plan.winP < go && wantStockpile(p)) yield { kind:'master', what:{ stockpile:true } };
+      if (plan.kit.length && plan.winP >= go) {
         const needMaster = plan.kit.some(id => MASTER_ONLY.has(id) && masterStock(id) > 0);
         if (needMaster) yield { kind:'master', what:{ kit:true } };
         const shopItems = [...new Set(plan.kit.filter(id => !MASTER_ONLY.has(id)))];
@@ -608,17 +679,23 @@ const BotAI = (() => {
     yield { kind:'refresh' };
   }
 
-  const goalKey = g => JSON.stringify([g.kind, g.tier ?? '', (g.items ?? []).join(), g.what?.id ?? g.what?.enchant ?? g.what?.skill ?? '']);
+  // goals that travel straight to a target: skip optional detours, wear the cloak
+  const RUSH = new Set(['dragon', 'boss', 'princess', 'finish']);
+  const goalKey = g => JSON.stringify([g.kind, g.tier ?? '', (g.items ?? []).join(), g.what?.id ?? g.what?.enchant ?? g.what?.skill ?? g.id ?? '']);
   function chooseGoal(p) {
     const m = M(p);
     m.goalBan ??= {};
     let last = null;
+    const hasCloak = p.hasItem('invis_cloak') || p.hasEquipped('invis_cloak');
+    m.cloakNeeded = false;
     for (const g of goalCandidates(p)) {
       if ((m.goalBan[goalKey(g)] ?? -1) > m.turns) continue;
       last = g;
       const tg = goalTargets(p, g);
-      const cloakTrip = ['dragon','princess','finish'].includes(g.kind) && (p.hasItem('invis_cloak') || p.hasEquipped('invis_cloak'));
-      if (tg.length && reachableFrom(p, tg, cloakTrip)) return g;
+      if (!tg.length) continue;
+      if (reachableFrom(p, tg, RUSH.has(g.kind) && hasCloak)) return g;
+      // only reachable past minibosses we can't fight (e.g. coming back from a boss): wear the cloak
+      if (hasCloak && !RUSH.has(g.kind) && reachableFrom(p, tg, true)) { m.cloakNeeded = true; return g; }
     }
     return last ?? { kind:'earn' };
   }
@@ -640,7 +717,8 @@ const BotAI = (() => {
 
   // Curses are the dragon bottleneck (10 per 15 turns): buy them whenever we can spare coins.
   function wantStockpile(p) {
-    return p.coins >= 250 && masterStock('sp_curse') > 0 && p.inventory.filter(x => x === 'sp_curse').length < 24;
+    const tn = tune(p);
+    return p.coins >= tn.stockpileCoins && masterStock('sp_curse') > 0 && p.inventory.filter(x => x === 'sp_curse').length < tn.curseCap;
   }
 
   // Coins we could raise right now by selling what keepItem() would sell anyway.
@@ -663,7 +741,7 @@ const BotAI = (() => {
       const { winP, heartsLost } = tierStats(p, t);
       const sustain = p.hasEnchantment('bloodlust') ? 1 : 0;
       if (canAlwaysEscape(p)) { if (fightOK(p, t, p.hearts.max, 0, 0.75)) best = t; continue; }
-      if (winP >= 0.97 && heartsLost - sustain <= 1.3) best = t;
+      if (winP >= tune(p).farmWin && heartsLost - sustain <= tune(p).farmHearts) best = t;
     }
     return best;
   }
@@ -693,20 +771,23 @@ const BotAI = (() => {
         if (used) return 0;
         const z = zoneAt(x, y);
         const w = tierWinP(p, z, p.hearts.current);
-        if (['dragon','finish','princess'].includes(goal.kind)) return 30;
+        if (RUSH.has(goal.kind)) return 30;
         return (1 - w) * 120 - 6;
       }
-      case TileType.CHEST:  return used || ['dragon','finish','princess'].includes(goal.kind) ? 0 : -6;
+      case TileType.CHEST:  return used || RUSH.has(goal.kind) ? 0 : -6;
       case TileType.REROLL: return Game.getState().rerollUsedThisTurn?.has(`${x},${y}`) ? turnLen : -3;
       case TileType.FIRE:   return -(p.hearts.max - p.hearts.current) * 4;
       case TileType.STOP:   return used ? 0 : turnLen * 0.5;
       case TileType.WORK: {
         const z = x < 21 ? 1 : x < 31 ? 2 : x < 41 ? 3 : 4;
-        return ['dragon','finish','princess'].includes(goal.kind) ? 0 : -z * 3.5 * 3 * coinStep;
+        return RUSH.has(goal.kind) ? 0 : -z * 3.5 * 3 * coinStep;
       }
       case TileType.PRIEST: return used ? 0 : -2;
       case TileType.BAR:    return goal.kind === 'bar' && p.coins >= 10 ? -(p.hearts.max - p.hearts.current) * 4 : 0;
-      case TileType.BOSS:   return goal.kind === 'dragon' ? 0 : 5000;
+      case TileType.BOSS: {
+        const id = MapGrid.getTileData(x, y)?.bossId;
+        return (goal.kind === 'dragon' && id === 'dragon') || (goal.kind === 'boss' && id === goal.id) ? 0 : 5000;
+      }
     }
     return 0;
   }
@@ -742,7 +823,7 @@ const BotAI = (() => {
     if (!item) return -INF;
     const b = item.statBonus ?? {};
     switch (item.slot) {
-      case profile(p).wslot: return (item.id === profile(p).weapon ? 100 : 0) + (b[ms] ?? 0) + (item.enchantment ? 3 : 0);
+      case profile(p).wslot: return weaponScore(p, item);
       case 'armor':     return item.id === 'invis_cloak' ? (wantCloak(p) && !M(p).bossMode ? 100 : -100) : (b.A ?? 0) + (b.V ?? 0) * 0.3 + (item.enchantment ? 2 : 0);
       case 'shield':    return (b.A ?? 0) + (item.enchantment ? 2 : 0);
       case 'speed':     return item.id === profile(p).guildExtra && !M(p).bossMode ? 100 : (b.V ?? 0);
@@ -751,16 +832,28 @@ const BotAI = (() => {
     }
     return -INF;   // slots we don't use
   }
+  // Main-stat value of a weapon once it carries our enchant (re-enchanting is a Master trip).
+  // Guild weapons are the build's identity (special effect, levels): always preferred.
+  function weaponScore(p, item) {
+    const pr = profile(p), ms = pr.main;
+    let v = item.statBonus?.[ms] ?? 0;
+    const lv = item.guild ? (p.guildItemLevels?.[item.id]?.itemLevel ?? 1) - 1 : 0;
+    v += lv;
+    const statEnch = e => e?.effect?.type === 'stat_bonus' && e.effect.stat === ms ? e.effect.value : 0;
+    if (item.enchantment) v += statEnch(item.enchantment) || 1;
+    else v += (statEnch(ENCHANTMENTS.find(e => e.id === pr.weaponEnchant)) || 1) - 0.5;   // potential, slightly discounted
+    return (pr.guildWeapon && item.id === pr.weapon ? 100 : 0) + v;
+  }
   function wantCloak(p) {
     const k = M(p).goal?.kind;
-    return p.hasPrincess || k === 'dragon' || k === 'princess' || k === 'finish' || k === 'hunt';
+    return p.hasPrincess || RUSH.has(k) || k === 'hunt' || !!M(p).cloakNeeded;
   }
   // Evaluate fn() as if our best real armor were worn instead of the cloak.
   function withRealArmor(p, fn) {
     if (!p.hasEquipped('invis_cloak')) return fn();
     const saved = p.equipped.armor;
     const alt = ['hv_armor','md_armor','lt_armor','jacket'].find(id => p.hasItem(id));
-    p.equipped.armor = alt ? getItem(alt) : null;
+    p.equipped.armor = alt ? invItem(p, alt) : null;
     try { return fn(); } finally { p.equipped.armor = saved; }
   }
   function wantedSlots(p, boss = M(p).bossMode) {
@@ -772,7 +865,7 @@ const BotAI = (() => {
   function bossLoadout(p) {
     const m = M(p), saved = m.bossMode; m.bossMode = true;
     try {
-      const pool = [...Object.values(p.equipped).filter(Boolean), ...new Set(p.inventory)].map(x => typeof x === 'string' ? getItem(x) : x).filter(it => it?.slot);
+      const pool = [...Object.values(p.equipped).filter(Boolean), ...new Set(p.inventory)].map(x => typeof x === 'string' ? invItem(p, x) : x).filter(it => it?.slot);
       const eq = {};
       for (const s of wantedSlots(p, true)) {
         let best = null, bv = -INF;
@@ -781,6 +874,11 @@ const BotAI = (() => {
       }
       return eq;
     } finally { m.bossMode = saved; }
+  }
+  // Inventory item as it would be once equipped (unequipped copies keep their enchantment).
+  function invItem(p, id) {
+    const it = getItem(id), ench = it?.slot && p.storedEnchantment?.(id);
+    return ench ? { ...it, enchantment: ench } : it;
   }
   // Evaluate fn() as if wearing the boss loadout (replaces the old cloak-only version).
   function withBossLoadout(p, fn) {
@@ -800,7 +898,7 @@ const BotAI = (() => {
       const cur = p.equipped[s];
       let best = null, bv = cur ? slotScore(p, cur) : -INF + 1;
       for (const id of new Set(p.inventory)) {
-        const it = getItem(id);
+        const it = invItem(p, id);
         if (it?.slot !== s) continue;
         const v = slotScore(p, it);
         if (v > bv) { bv = v; best = id; }
@@ -1210,7 +1308,7 @@ const BotAI = (() => {
     const dr = bossPos('dragon'); if (!dr) return null;
     const close = rivals(p).some(q => Math.abs(q.position.x - dr.x) + Math.abs(q.position.y - dr.y) <= 3);
     if (!close) return null;
-    if ((M(p).lastDragonP ?? 0) >= 0.85) return null;           // we're about to go ourselves
+    if ((M(p).lastDragonP ?? 0) >= tune(p).dragonGo) return null;           // we're about to go ourselves
     // the shop nearest to the dragon→finish corridor
     const shop = tilesOf(TileType.SHOP).reduce((b, s) => (Math.abs(s.x - 40) + Math.abs(s.y - 10)) < (Math.abs(b.x - 40) + Math.abs(b.y - 10)) ? s : b);
     if (p.position.x === shop.x && p.position.y === shop.y) return null;
@@ -1316,11 +1414,11 @@ const BotAI = (() => {
   function getPhase(p) {
     const g = M(p).goal;
     if (!g) return 'idle';
-    return `[${profile(p).name}] ` + g.kind + (g.tier != null ? `:t${g.tier}` : '') + (g.items ? `:${g.items.join('+')}` : '') + (g.what?.skill ? `:skill_${g.what.skill}` : '') + (g.what?.enchant ? `:${g.what.enchant}` : '');
+    return `[${profile(p).name}] ` + g.kind + (g.tier != null ? `:t${g.tier}` : '') + (g.items ? `:${g.items.join('+')}` : '') + (g.what?.skill ? `:skill_${g.what.skill}` : '') + (g.what?.enchant ? `:${g.what.enchant}` : '') + (g.kind === 'boss' ? `:${g.id}` : '');
   }
 
   function getStrategy(p) { return profile(p).name; }
 
   return { takeTurn, chooseCombatAction, getPhase, configure, getStrategy, pvpTick,
-           _debug: { reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
+           _debug: { bossLoadout, withBossLoadout, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
 })();
