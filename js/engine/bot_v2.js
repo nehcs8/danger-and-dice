@@ -128,7 +128,14 @@ const BotAI = (() => {
   // ════════════════════════════════════════════════════════════════════════════
   // 1. Fight model (Monte Carlo, mirrors combat.js)
   // ════════════════════════════════════════════════════════════════════════════
-  const d6 = () => 1 + Math.floor(Math.random() * 6);
+  // Fight simulations draw from their own generator, restarted at the same seed for every
+  // simFight call (common random numbers): two kits are compared on the same dice, so the
+  // difference between them is far less noisy, and the game's own dice stream is left alone.
+  let rng = Math.random;
+  const d6 = () => 1 + Math.floor(rng() * 6);
+  function mulberry32(a) {
+    return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  }
 
   // Snapshot of everything about the player that matters in a fight.
   function snapshot(p, { usePots = false } = {}) {
@@ -184,7 +191,7 @@ const BotAI = (() => {
   function redirectC(stats) {
     const best = Math.max(stats.F, stats.D, stats.M);
     const tied = ['F','D','M'].filter(s => stats[s] === best);
-    return tied[Math.floor(Math.random() * tied.length)];
+    return tied[Math.floor(rng() * tied.length)];
   }
   // Attack types the mob can actually use against us
   function effectiveAttackTypes(stats, immuneC) {
@@ -421,7 +428,7 @@ const BotAI = (() => {
           if (dmg) { mhp -= dmg; if (mhp <= 0) return { win:true, heartsLeft:hp, healsUsed }; } }
         const skip = stunned && d6() <= 3; stunned = false;
         const atkTypes = mobAttackTypes(ms);
-        let t = atkTypes[Math.floor(Math.random() * atkTypes.length)];
+        let t = atkTypes[Math.floor(rng() * atkTypes.length)];
         if (t === 'C' && snap.immuneC) t = redirectC(ms);
         if (hp === 1 && heals > 0) { heals--; healsUsed++; hp++; }
         const dsPre = t === 'M' && snap.arcane ? 'A' : DEF[t];
@@ -432,7 +439,7 @@ const BotAI = (() => {
         let def = st[ds] + (t === 'M' ? snap.prot : 0) + d6();
         if (snap.usePots && pots[ds].length) def += pots[ds].shift();
         if (ms[t] - 3 + d6() > def) {
-          if (snap.thorns && Math.random() < 0.3) { mhp--; if (mhp <= 0) return { win:true, heartsLeft:hp, healsUsed }; }
+          if (snap.thorns && rng() < 0.3) { mhp--; if (mhp <= 0) return { win:true, heartsLeft:hp, healsUsed }; }
           else { hp--; if (hp <= 0) return { win:false, heartsLeft:0, healsUsed }; }
         }
         // end of round: maluses (and our Charisma bonuses) tick
@@ -448,9 +455,12 @@ const BotAI = (() => {
   function smokeWorth(defStat, mobAtk, hp) { return hp <= 1 || (mobAtk - 3) - defStat >= 2; }
 
   function simFight(snap, mobTpl, n = 200) {
-    let w = 0, hl = 0, hu = 0;
-    for (let i = 0; i < n; i++) { const r = simOnce(snap, mobTpl); if (r.win) { w++; hl += snap.hearts - r.heartsLeft; } hu += r.healsUsed; }
-    return { winP: w / n, heartsLost: w ? hl / w : snap.hearts, healsUsed: hu / n };
+    const saved = rng; rng = mulberry32(0x9E3779B9);
+    try {
+      let w = 0, hl = 0, hu = 0;
+      for (let i = 0; i < n; i++) { const r = simOnce(snap, mobTpl); if (r.win) { w++; hl += snap.hearts - r.heartsLeft; } hu += r.healsUsed; }
+      return { winP: w / n, heartsLost: w ? hl / w : snap.hearts, healsUsed: hu / n };
+    } finally { rng = saved; }
   }
 
   // Exact odds of a plain fight (no potions, heals, curses, spells or smoke), mirroring simOnce:
@@ -613,9 +623,12 @@ const BotAI = (() => {
   // like ours) would raise the dragon win probability. Cached on our gear/stats/inventory.
   function bossOptions(p) {
     const m = M(p), st = Game.getState();
-    const key = `${p.inventory.slice().sort().join(',')}|${Object.values(p.equipped).map(i => i ? i.id + (i.enchantment?.id ?? '') : '-').join(',')}|${['F','D','A','M','C','V'].map(s => p.getStat(s)).join(',')}|${[...st.defeatedBosses].join(',')}|${p.hearts.max}`;
+    // what the evaluation uses: the boss loadout we'd wear, fight consumables, stats, dead bosses
+    const gear = Object.values(bossLoadout(p)).map(i => i ? i.id + (i.enchantment?.id ?? '') : '-').join(',');
+    const stats = withBossLoadout(p, () => ['F','D','A','M','C','V'].map(s => p.getStat(s)).join(','));
+    const key = `${p.inventory.filter(fightItem).sort().join(',')}|${gear}|${stats}|${[...st.defeatedBosses].join(',')}|${p.hearts.max}`;
     if (m.bossOpt?.key === key) return m.bossOpt.list;
-    const base = withBossLoadout(p, () => dragonWinP(p, REF_KIT, 300));
+    const base = withBossLoadout(p, () => dragonWinP(p, REF_KIT, SIM_CMP));
     const list = [];
     for (const id of HUNT_BOSSES) {
       if (st.defeatedBosses.has(id) || !bossPos(id)) continue;
@@ -624,8 +637,8 @@ const BotAI = (() => {
       fake.inventory = p.inventory.concat(drops);
       fake.storedEnchantments = { ...p.storedEnchantments };
       for (const d of new Set(drops)) { const it = getItem(d); const e = it?.slot && enchantFor(p, it.slot); if (e) fake.storedEnchantments[d] = [e]; }
-      const after = withBossLoadout(fake, () => dragonWinP(fake, REF_KIT, 300));
-      const win = withBossLoadout(p, () => mobWinP(p, id, [], 300));
+      const after = withBossLoadout(fake, () => dragonWinP(fake, REF_KIT, SIM_CMP));
+      const win = withBossLoadout(p, () => mobWinP(p, id, [], 200));
       list.push({ id, gain: after - base, win });
     }
     m.bossOpt = { key, list };
@@ -807,6 +820,7 @@ const BotAI = (() => {
   // Greedy kit planner: repeatedly add the bundle with the best win-probability
   // gain per coin until the target is reached or the budget runs out.
   const KIT_STEP = 2;
+  const SIM_CMP = 120;          // fights per estimate when comparing options (common random numbers keep the differences tight)
   function kitCandidates(p) {
     const ms = mainStat(p);
     const c = ['sp_curse', 'sp_smoke', 'pot_heal', `pot_${ms}3`, 'pot_A3', 'pot_V6', 'pot_C3'];
@@ -815,7 +829,7 @@ const BotAI = (() => {
   }
   function planKit(p, budget, target = 0.9) {
     const kit = [];
-    let cur = dragonWinP(p, kit, 300);
+    let cur = dragonWinP(p, kit, SIM_CMP);
     while (cur < target) {
       let best = null, bestGain = 0;
       for (const id of kitCandidates(p)) {
@@ -825,12 +839,12 @@ const BotAI = (() => {
         if (owned >= (id === 'sp_curse' ? 30 : 14)) continue;
         if (LIMITED.has(id) && kit.filter(x => x === id).length + KIT_STEP > masterStock(id)) continue;
         const add = Array(KIT_STEP).fill(id);
-        const g = (dragonWinP(p, kit.concat(add), 300) - cur) / c;
+        const g = (dragonWinP(p, kit.concat(add), SIM_CMP) - cur) / c;
         if (g > bestGain) { bestGain = g; best = add; }
       }
       if (!best) break;
       kit.push(...best); budget -= getItem(best[0]).buyPrice * KIT_STEP;
-      cur = dragonWinP(p, kit, 300);
+      cur = dragonWinP(p, kit, SIM_CMP);
     }
     return { kit, winP: cur };
   }
@@ -844,9 +858,36 @@ const BotAI = (() => {
   }
   function cachedPlan(p) {
     const m = M(p);
-    const key = `${Math.floor(p.coins / 50)}|${p.inventory.slice().sort().join(',')}|${['F','D','A','V','C'].map(s => p.getStat(s)).join(',')}`;
-    if (m.plan?.key !== key) m.plan = { key, ...planKit(p, p.coins - 20, tune(p).kitTarget) };
-    return m.plan;
+    // only what the dragon fight uses: consumables in the bag, worn gear, stats
+    const inv = p.inventory.filter(fightItem).sort();
+    const stats = `${Object.values(p.equipped).map(i => i ? i.id + (i.enchantment?.id ?? '') : '-').join(',')}/${['F','D','A','M','V','C'].map(s => p.getStat(s)).join(',')}`;
+    const key = `${Math.floor(p.coins / 50)}|${inv.join(',')}|${stats}`;
+    m.plans ??= new Map();
+    let plan = m.plans.get(key);
+    if (!plan) {
+      if (m.plans.size >= 4) m.plans.delete(m.plans.keys().next().value);
+      plan = carryPlan(m.lastPlan, inv, stats) ?? { ...planKit(p, p.coins - 20, tune(p).kitTarget) };
+      plan = { ...plan, key, inv, stats };
+      m.plans.set(key, plan); m.lastPlan = plan;
+    }
+    return plan;
+  }
+  const fightItem = id => { const it = getItem(id); return !it?.slot && (id === 'pot_heal' || id === 'sp_curse' || id === 'sp_smoke' || /^pot_[FDAMCV]\d$/.test(id) || ATTACK_SPELLS.has(id) || !!it?.statBonus); };
+  // We just bought part of the last plan (or picked up extra consumables): the rest of it still
+  // stands, at least at the same odds — no need to re-plan after every purchase. Gear or stats
+  // changed, or a consumable was used up → null.
+  function carryPlan(prev, inv, stats) {
+    if (!prev || prev.stats !== stats) return null;
+    const left = prev.kit.slice(), have = new Map();
+    for (const id of prev.inv) have.set(id, (have.get(id) ?? 0) + 1);
+    for (const id of inv) {
+      const n = have.get(id) ?? 0;
+      if (n > 0) { have.set(id, n - 1); continue; }
+      const i = left.indexOf(id);
+      if (i >= 0) left.splice(i, 1);                               // bought from the plan; otherwise a bonus
+    }
+    for (const n of have.values()) if (n > 0) return null;      // something was used up or sold
+    return { kit: left, winP: prev.winP };
   }
 
   function gearDone(p) { return shoppingList(p).filter(i => i.id !== 'invis_cloak' && !i.skill).length === 0; }
@@ -1362,7 +1403,7 @@ const BotAI = (() => {
         && p.inventory.filter(x => x === 'pot_heal').length < 24) return act({ type:'buy', itemId:'pot_heal' });
     // dragon kit
     if (shoppingList(p).length === 0) {
-      const plan = cachedPlan(p);
+      const plan = withBossLoadout(p, () => cachedPlan(p));
       if (plan.winP >= 0.8 || M(p).goal?.kit) {
         for (const id of plan.kit) if (!MASTER_ONLY.has(id) && avail(id) && p.coins >= getItem(id).buyPrice)
           return act({ type:'buy', itemId:id });
