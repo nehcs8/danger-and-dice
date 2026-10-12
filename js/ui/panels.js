@@ -110,6 +110,7 @@ const Panels = (() => {
     });
 
     Game.on('item_used', () => {
+      if (!humanInvolved()) return;
       if (Game.getState().phase === Game.Phase.COMBAT) {
         refreshCombatConsumables();
         refreshCombatPlayerStats();
@@ -117,17 +118,17 @@ const Panels = (() => {
       }
     });
 
-    Game.on('heal_target_pending', data => showHealTargetModal(data));
+    Game.on('heal_target_pending', data => { if (humanInvolved()) showHealTargetModal(data); });
 
     // Refresh master panel after skill purchase or enchant
     Game.on('skill_upgraded', () => {
-      if (Game.getState().phase === Game.Phase.MASTER) {
+      if (humanInvolved() && Game.getState().phase === Game.Phase.MASTER) {
         showMaster({});
         HUD.update({});
       }
     });
     Game.on('enchanted', () => {
-      if (Game.getState().phase === Game.Phase.MASTER) {
+      if (humanInvolved() && Game.getState().phase === Game.Phase.MASTER) {
         showMaster({});
         HUD.update({});
       }
@@ -135,7 +136,7 @@ const Panels = (() => {
 
     Game.on('combat_update', data => {
       const logEl = _el('combat-log');
-      if (!logEl) return;
+      if (!logEl || !humanInvolved()) return;
       if (data.pvp) { pvpCombatUpdate(data); return; }
       const emitColor = data.logType === 'curse' ? '#c470e0'
                       : data.logType === 'bard'  ? '#ffd080'
@@ -205,10 +206,19 @@ const Panels = (() => {
     });
   }
 
+  // A human takes part in what is on screen: the current player, or a PvP duellist.
+  // Bot-only phases get no popups — the bot banner and the turn log show what happens.
+  function humanInvolved() {
+    if (Game.getCurrentPlayer()?.isBot === false) return true;
+    const ids = Game.getState().pendingPvp?.ids ?? [];
+    return Game.getPlayers().some(p => ids.includes(p.id) && !p.isBot);
+  }
+
   // ── Phase dispatcher ──────────────────────────────────────────────────────
   function handlePhase(data) {
     hideAll();
     HUD.update(data);
+    if (!humanInvolved()) return;
 
     switch (data.phase) {
       case Game.Phase.SETUP_ROLL:
@@ -1051,6 +1061,7 @@ const Panels = (() => {
 
   // ── Shop ──────────────────────────────────────────────────────────────────
   function refreshShop() {
+    if (!humanInvolved()) return;
     showShop({ guildType: currentShopGuildType });
     HUD.update({});
   }
@@ -1227,9 +1238,9 @@ const Panels = (() => {
     function getMasterStock(itemId) {
       const keys = MASTER_LIMITED_KEYS[itemId];
       if (!keys) return null;
-      const restocked = gs.turnNumber - gs[keys.resetKey] >= 15;
+      const restocked = gs.round - gs[keys.resetKey] >= 15;
       const avail     = restocked ? 10 : gs[keys.stockKey];
-      const turns     = restocked ? 0  : 15 - (gs.turnNumber - gs[keys.resetKey]);
+      const turns     = restocked ? 0  : 15 - (gs.round - gs[keys.resetKey]);
       return { avail, turns, soldOut: avail <= 0 };
     }
     [...COMBAT_SPELLS, ...UTILITY_SPELLS].forEach(item => {
@@ -1258,6 +1269,7 @@ const Panels = (() => {
   }
 
   function refreshMaster() {
+    if (!humanInvolved()) return;
     showMaster({});
     HUD.update({});
   }
@@ -1316,10 +1328,12 @@ const Panels = (() => {
     }
   }
 
-  // ── Cloak choice (Invisibility Cloak on MINIBOSS tile) ───────────────────
+  // ── Cloak choice (Invisibility Cloak or Potion on MINIBOSS tile) ─────────
   function showCloakChoice(data) {
     const mob = data.mob;
     showModal('modal-cloak-choice');
+    _el('cloak-choice-title').textContent =
+      Game.getCurrentPlayer()?.hasEquipped('invis_cloak') ? 'Invisibility Cloak' : 'Invisibility Potion (one use)';
     _el('cloak-mob-name').textContent = mob ? mob.name : 'an enemy';
     function closeCloakModal() {
       _el('modal-cloak-choice').classList.add('hidden');
@@ -1398,6 +1412,18 @@ const Panels = (() => {
 
     // Save section
     _buildSaveSection(_el('gameover-save'), data, summary);
+  }
+
+  // Close the results to look over the final map and inventories; the left-panel
+  // "Show Results" button brings them back (content and save form are kept).
+  function hideGameOver() {
+    hideAll();
+    _el('btn-show-results').classList.remove('hidden');
+  }
+
+  function reopenGameOver() {
+    _el('btn-show-results').classList.add('hidden');
+    showModal('modal-gameover');
   }
 
   function _buildSaveSection(container, data, summary) {
@@ -1509,5 +1535,5 @@ const Panels = (() => {
 
   function _el(id) { return document.getElementById(id); }
 
-  return { init, handlePhase, showGameOver, refreshShop, refreshMaster };
+  return { init, handlePhase, showGameOver, hideGameOver, reopenGameOver, refreshShop, refreshMaster };
 })();

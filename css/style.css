@@ -1484,3 +1484,76 @@ body {
   cursor: pointer;
   font-size: 0.85rem;
 }
+
+/* ── Activity: players strip, hover card, bot banner, turn log ───────────── */
+#map-container { flex-direction: column; gap: 6px; }
+#map-wrap { position: relative; }
+
+#players-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.pchip {
+  display: flex; align-items: center; gap: 6px; padding: 4px 9px;
+  background: #1a1a2e; border: 1px solid #2c2c48; border-radius: 14px;
+  font-size: 0.78rem; color: #ddd; cursor: pointer; user-select: none;
+}
+.pchip:hover { border-color: #666; }
+.pchip.active { border-color: #ffd700; box-shadow: 0 0 0 1px #ffd70066; }
+.pchip.pinned { background: #24243c; }
+.pchip.dead { opacity: 0.45; }
+.pchip-stat { color: #aaa; }
+.pchip-goal { color: #8fb3d9; font-size: 0.72rem; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1px solid #000; flex: none; }
+
+#player-card {
+  display: none; position: fixed; z-index: 900; width: 300px; max-height: 80vh; overflow-y: auto;
+  background: #161626; border: 1px solid #3a3a5a; border-radius: 8px; padding: 10px 12px;
+  font-size: 0.78rem; color: #ddd; box-shadow: 0 6px 24px rgba(0,0,0,0.6); pointer-events: none;
+}
+.card-title { display: flex; align-items: center; gap: 6px; font-size: 0.95rem; padding-bottom: 5px; border-bottom: 2px solid; margin-bottom: 5px; }
+.card-title .pin { margin-left: auto; }
+.card-goal { color: #8fb3d9; margin-bottom: 4px; }
+.card-row { margin-bottom: 4px; }
+.card-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; text-align: center; margin-bottom: 4px; }
+.card-stats i, .card-eq i { color: #888; font-style: normal; font-size: 0.68rem; display: block; }
+.card-eq i { display: inline; }
+.card-sec { color: #ffd700; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 1px; margin: 6px 0 2px; }
+.card-eq div { padding: 1px 0; }
+.card-eq .ench { color: #c9a0ff; }
+.card-inv { display: flex; flex-wrap: wrap; gap: 3px; }
+.inv-chip { background: #22223a; border-radius: 4px; padding: 1px 5px; }
+.card-turn { border-top: 1px solid #2a2a40; padding-top: 3px; margin-top: 3px; }
+
+#bot-banner {
+  display: none; position: absolute; top: 6px; left: 6px; max-width: 340px; z-index: 5;
+  background: rgba(14,14,26,0.88); border: 1px solid; border-left-width: 4px; border-radius: 6px;
+  padding: 5px 9px; font-size: 0.76rem; color: #ddd; pointer-events: none;
+}
+
+/* turn log */
+#log-display h3 .log-hint { color: #665a45; font-size: 0.65rem; text-transform: none; letter-spacing: 0; font-weight: normal; }
+#log-filters { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.log-filter { display: flex; align-items: center; gap: 4px; background: #1a1a2e; border: 1px solid #2c2c48; color: #ccc;
+  border-radius: 10px; padding: 1px 7px; font-size: 0.7rem; cursor: pointer; }
+.log-filter.off { opacity: 0.35; text-decoration: line-through; }
+.act-turn { border-left: 3px solid; padding: 3px 0 3px 6px; margin-bottom: 4px; background: rgba(255,255,255,0.02); }
+.act-turn.current { background: rgba(255,215,0,0.06); }
+.act-head { cursor: pointer; display: flex; align-items: center; gap: 5px; white-space: nowrap; min-width: 0; }
+.act-head b { flex: none; }
+.act-t { color: #776a50; font-size: 0.7rem; flex: none; }
+.act-goal { color: #8fb3d9; font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.act-delta { margin-left: auto; font-size: 0.72rem; flex: none; }
+.act-toggle { color: #665a45; font-size: 0.7rem; }
+.act-ev { color: #b8b0a0; padding-left: 4px; }
+.act-ev.dim { color: #665a45; }
+.good { color: #8fe08f; }
+.bad { color: #ff8a8a; }
+.act-raw { margin-top: 3px; padding: 3px 6px; background: #0c0c16; color: #8a8270; font-size: 0.7rem; border-radius: 4px; }
+
+/* Game over: close the results to inspect the board, reopen from the left panel */
+.gameover-actions { display: flex; gap: 10px; justify-content: center; }
+#btn-view-map {
+  font-size: 1rem; padding: 8px 24px;
+  background: #2a2a4a; color: #ffd700; border: 1px solid #ffd700; border-radius: 3px;
+  cursor: pointer; font-weight: bold;
+}
+#btn-view-map:hover { background: #3a3a5a; }
+.action-btn.hidden { display: none; }

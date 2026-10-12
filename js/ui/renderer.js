@@ -90,9 +90,10 @@ const Renderer = (() => {
           continue;
         }
 
-        // Highlight reachable tiles (orange = requires passing a STOP tile)
+        // Highlight reachable tiles (orange = passes a STOP tile, violet = needs Invisibility Potions)
         if (highlightedTiles?.has(`${x},${y}`)) {
-          ctx.fillStyle = state.stopBlockedTiles?.has(`${x},${y}`) ? '#ffaa44' : '#aaff88';
+          ctx.fillStyle = highlightedTiles.potionOnly?.has(`${x},${y}`) ? '#c9a0ff'
+            : state.stopBlockedTiles?.has(`${x},${y}`) ? '#ffaa44' : '#aaff88';
         } else {
           ctx.fillStyle = color;
         }
@@ -121,40 +122,90 @@ const Renderer = (() => {
       drawToken(princess.x, princess.y, '👸', '#fff0d0');
     }
 
-    // ── Players ────────────────────────────────────────────────────────────
+    // ── Last-turn trails (each player's path in their colour; current player on top) ──
+    const cur = Game.getCurrentPlayer();
+    const paths = typeof Activity !== 'undefined' ? Activity.lastPaths() : {};
+    const order = players.filter(p => p !== cur).concat(cur ? [cur] : []);
+    for (const p of order) {
+      const segs = paths[p.id]; if (!segs || !p.isAlive) continue;
+      const col = PLAYER_COLORS[players.indexOf(p)];
+      const mine = p === cur;
+      ctx.save();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      for (const seg of segs) {
+        if (seg.length < 2) continue;
+        const jump = seg.length === 2 && Math.abs(seg[0].x - seg[1].x) + Math.abs(seg[0].y - seg[1].y) > 1;
+        ctx.setLineDash(jump ? [4, 4] : []);
+        // dark underlay for contrast, then the colour
+        for (const [w, c, a] of [[mine ? 6 : 5, '#000', 0.45], [mine ? 3.5 : 2.5, col, mine ? 0.95 : 0.7]]) {
+          ctx.globalAlpha = a; ctx.strokeStyle = c; ctx.lineWidth = w;
+          ctx.beginPath();
+          seg.forEach((t, k) => { const cx = PAD + t.x * TILE + TILE / 2, cy = PAD + t.y * TILE + TILE / 2; k ? ctx.lineTo(cx, cy) : ctx.moveTo(cx, cy); });
+          ctx.stroke();
+        }
+        // start marker
+        const s0 = seg[0];
+        ctx.setLineDash([]); ctx.globalAlpha = mine ? 0.95 : 0.7; ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(PAD + s0.x * TILE + TILE / 2, PAD + s0.y * TILE + TILE / 2, 2.5, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // ── Players (big outlined tokens; players sharing a tile are nudged apart) ──
+    const byTile = {};
+    players.forEach(p => { if (p.isAlive) (byTile[`${p.position.x},${p.position.y}`] ??= []).push(p); });
+    tokenSpots = [];
     players.forEach((p, i) => {
       if (!p.isAlive) return;
-      const { x, y } = p.position;
-      const px = PAD + x * TILE;
-      const py = PAD + y * TILE;
+      const group = byTile[`${p.position.x},${p.position.y}`];
+      const k = group.indexOf(p), n = group.length;
+      const off = n > 1 ? TILE * 0.32 : 0, ang = (k / n) * Math.PI * 2 - Math.PI / 2;
+      const cx = PAD + p.position.x * TILE + TILE / 2 + Math.cos(ang) * off;
+      const cy = PAD + p.position.y * TILE + TILE / 2 + Math.sin(ang) * off;
+      const r = TILE * (n > 1 ? 0.5 : 0.62);
+      tokenSpots.push({ p, cx, cy, r });
 
+      if (p === cur) {                         // current player: gold halo + pointer
+        ctx.fillStyle = 'rgba(255,215,0,0.35)';
+        ctx.beginPath(); ctx.arc(cx, cy, r + 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffd700';
+        ctx.beginPath(); ctx.moveTo(cx, cy - r - 2); ctx.lineTo(cx - 5, cy - r - 10); ctx.lineTo(cx + 5, cy - r - 10); ctx.closePath(); ctx.fill();
+      }
       ctx.fillStyle = PLAYER_COLORS[i];
-      ctx.beginPath();
-      ctx.arc(px + TILE / 2, py + TILE / 2, TILE * 0.38, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.strokeStyle = '#111'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = p === cur ? '#ffd700' : '#fff'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cx, cy, r - 1.5, 0, Math.PI * 2); ctx.stroke();
 
       ctx.fillStyle = '#fff';
-      ctx.font      = `bold ${Math.max(8, Math.floor(TILE * 0.45))}px sans-serif`;
+      ctx.font      = `bold ${Math.max(9, Math.floor(r * 1.1))}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(p.name[0].toUpperCase(), px + TILE / 2, py + TILE / 2);
+      ctx.fillText(tokenLabel(p, players), cx, cy + 0.5);
 
-      // Crown if carrying princess
-      if (p.hasPrincess) {
-        ctx.font = `${Math.floor(TILE * 0.5)}px sans-serif`;
-        ctx.fillText('👑', px + TILE / 2, py + TILE * 0.15);
+      if (p.hasPrincess) {                     // crown if carrying the princess
+        ctx.font = `${Math.floor(TILE * 0.7)}px sans-serif`;
+        ctx.fillText('👑', cx + r * 0.7, cy - r * 0.8);
       }
     });
-
-    // ── Current player highlight ────────────────────────────────────────────
-    const cur = Game.getCurrentPlayer();
-    if (cur?.isAlive) {
-      const { x, y } = cur.position;
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth   = 2;
-      ctx.strokeRect(PAD + x * TILE, PAD + y * TILE, TILE, TILE);
-    }
   }
+
+  // Initial of the name, or the player number when initials clash ("Player 1".."Player 4")
+  function tokenLabel(p, players) {
+    const ini = q => (q.name.trim()[0] ?? '?').toUpperCase();
+    return players.some(q => q !== p && ini(q) === ini(p)) ? String(players.indexOf(p) + 1) : ini(p);
+  }
+
+  let tokenSpots = [];
+  // Player whose token is under the canvas point (for hover cards)
+  function playerAt(canvasX, canvasY) {
+    for (let i = tokenSpots.length - 1; i >= 0; i--) {
+      const t = tokenSpots[i];
+      if ((canvasX - t.cx) ** 2 + (canvasY - t.cy) ** 2 <= (t.r + 2) ** 2) return t.p;
+    }
+    return null;
+  }
+  const playerColor = i => PLAYER_COLORS[i] ?? '#888';
 
   function drawToken(x, y, label, bg) {
     const px = PAD + x * TILE;
@@ -184,5 +235,5 @@ const Renderer = (() => {
     return { x, y };
   }
 
-  return { init, draw, tileAt, coordsAt };
+  return { init, draw, tileAt, coordsAt, playerAt, playerColor };
 })();

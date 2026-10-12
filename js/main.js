@@ -71,6 +71,7 @@
     Panels.init();
     bindGameEvents();
     Game.init(players, selectedDifficulty);
+    Activity.init();
     Renderer.draw();
 
     // Stats tracking always active; speed controls only revealed in all-bot spectate mode
@@ -107,7 +108,7 @@
       // Always update the top-bar turn counter on every new player turn
       if (data.phase === Game.Phase.ROLL_MOVE) {
         const el = $('spectate-turn');
-        if (el) el.textContent = `Turn ${Game.getState().turnNumber}`;
+        if (el) el.textContent = `Turn ${Game.getState().round}`;
       }
 
       // Auto-trigger for bots
@@ -129,10 +130,6 @@
           setTimeout(() => BotAI.takeTurn(player), botDelay());
         }
       }
-    });
-
-    Game.on('log', data => {
-      HUD.appendLog(data.message, data.turn);
     });
 
     Game.on('player_moved',    () => Renderer.draw());
@@ -199,17 +196,18 @@
 
     Game.on('item_used', () => HUD.update({}));
 
-    Game.on('xp_levelup', data => {
-      HUD.appendLog(`[XP] ${data.player}: ${data.stat} reaches ${data.newValue} via experience!`);
-      HUD.update({});
-    });
+    Game.on('xp_levelup', () => HUD.update({}));
 
     $('btn-open-inventory').addEventListener('click', () => HUD.openInventoryPopup());
     $('btn-close-inventory').addEventListener('click', () => HUD.closeInventoryPopup());
 
     Game.on('game_over', data => {
+      HUD.update({ phase: Game.Phase.GAME_OVER });
+      Renderer.draw();
       Panels.showGameOver(data);
     });
+    $('btn-view-map').addEventListener('click', () => Panels.hideGameOver());
+    $('btn-show-results').addEventListener('click', () => Panels.reopenGameOver());
 
     // Roll button (also ends turn when stop-blocked)
     function doRoll() {
@@ -272,6 +270,10 @@
     }
 
     $('map-canvas').addEventListener('mousemove', e => {
+      // player token → detail card
+      const who = Renderer.playerAt(e.offsetX, e.offsetY);
+      Activity.hoverToken(who, e.clientX, e.clientY);
+      if (who) { tooltip.style.display = 'none'; return; }
       const coords = Renderer.coordsAt(e.offsetX, e.offsetY);
       if (!coords || MapGrid.get(coords.x, coords.y) !== TileType.BOSS) {
         tooltip.style.display = 'none';
@@ -299,6 +301,7 @@
     });
     $('map-canvas').addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
+      Activity.hoverToken(null);
     });
   }
 

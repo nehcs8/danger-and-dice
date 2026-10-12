@@ -20,3 +20,6 @@ engine_sim_results.json
 *.swo
 *~
 .DS_Store
+
+# Strategy tournament output
+results/
