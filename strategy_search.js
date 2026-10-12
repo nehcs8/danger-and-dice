@@ -14,7 +14,7 @@ const fs = require('fs'), path = require('path'), { fork } = require('child_proc
 const { makeSandbox, get } = require('./lib_sb.js');
 
 const CAP = 250;
-const BASES = ['F','D','FB','DB','M','G','GB','BP','DT','SS','BB','BM','CH','CR'];
+const BASES = ['F','D','FB','DB','DG','DBG','M','G','GB','BP','DT','SS','BB','BM','CH','CR'];
 const SPACE = {
   shield: [true, false], shieldRes: [true, false], armorEnch: [true, false],
   pegasus: [true, false], accordion: [true, false], cloak: [true, false], rope: [true, false],

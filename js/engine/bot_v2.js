@@ -31,6 +31,11 @@ const BotAI = (() => {
     D: { name:'D', main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'precision' },
     FB: { name:'FB', main:'F', weapon:'halberd',  wslot:'strength',  weaponEnchant:'bloodlust' },
     DB: { name:'DB', main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'bloodlust' },
+    // Map farmers: an A-tank (Heavy Armor + Large Shield, Resistance on both ≈ A18) carrying Maps
+    // picks the miniboss that only attacks with F on every tier (Guard, Orc, Werewolf, Giant)
+    // and shoots it through its weak V. Giants (t3) pay ~155 coins + Halberd + Pegasus each.
+    DG:  { name:'DG',  main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'precision', mapFarm:true, tune:{ pegasus:false } },
+    DBG: { name:'DBG', main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'bloodlust', mapFarm:true, tune:{ pegasus:false } },
     M: { name:'M', main:'M', weapon:'grimoire', wslot:'magic', needsSpell:true },
     // Garrote: executes any mob at ≤2 hearts with an F attack. Farms z0 for free from turn one;
     // levels to F+6 through miniboss wins. G = Sharpness (+3F) on it, GB = Bloodlust (human route).
@@ -75,6 +80,8 @@ const BotAI = (() => {
     beastFriends: 2,            // Beastmaster: animal friends to keep (one to train, one as dragon backup)
     befriendMinP: 0.17,         // Beastmaster: try Charisma on an animal when P(margin ≥ 7) is at least this
     beastGo: 0.95,              // Beastmaster: send the friends at the dragon at this win probability (heals are cheap)
+    mapFarm: false,             // carry Maps and pick each miniboss tile's best mob for us (see DG)
+    mapStock: 4,                // Maps to keep in the bag while map farming
   };
   function tune(p) { const m = M(p); if (!m.profile) profile(p); return m.tune ?? DEFAULT_TUNE; }
 
@@ -398,16 +405,25 @@ const BotAI = (() => {
 
   // Win probability (and expected hearts lost) vs a whole miniboss tier (one of its 6 named
   // mobs at random), without stat potions. Cached per stat-signature.
+  // useMap: a Map picks the d6 roll, so the tier means its best mob for us (`pick` = roll − 1).
+  const mapFarm = p => !!(profile(p).mapFarm || tune(p).mapFarm);
+  const mapsHeld = p => p.inventory.filter(x => x === 'map').length;
   const _tierCache = {};
-  function tierStats(p, tier, hearts = null) {
+  function tierStats(p, tier, hearts = null, useMap = mapFarm(p) && mapsHeld(p) > 0) {
     const snap = snapshot(p);
     if (hearts != null) snap.hearts = hearts;
     snap.heals = 0;
-    const key = `${p.id}|${tier}|${snap.atk.join('')}|${JSON.stringify(snap.st)}|${snap.hearts}|${snap.kryss}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.thorns}|${snap.fury}|${snap.arcane}|${snap.charm}|${snap.rattle}`;
+    const key = `${p.id}|${tier}|${useMap}|${snap.atk.join('')}|${JSON.stringify(snap.st)}|${snap.hearts}|${snap.kryss}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.thorns}|${snap.fury}|${snap.arcane}|${snap.charm}|${snap.rattle}`;
     if (_tierCache[key]) return _tierCache[key];
     const pool = MOBS.getByTier(tier).filter(m => !m.isBoss).slice(0, 6);
+    const rs = pool.map(m => simFight(snap, m, 120));
+    if (useMap) {
+      let pick = 0;
+      rs.forEach((r, i) => { if (r.winP - 0.05 * r.heartsLost > rs[pick].winP - 0.05 * rs[pick].heartsLost) pick = i; });
+      return (_tierCache[key] = { winP: rs[pick].winP, heartsLost: rs[pick].heartsLost, pick });
+    }
     let w = 0, hl = 0;
-    for (const m of pool) { const r = simFight(snap, m, 120); w += r.winP; hl += r.heartsLost; }
+    for (const r of rs) { w += r.winP; hl += r.heartsLost; }
     return (_tierCache[key] = { winP: w / pool.length, heartsLost: hl / pool.length });
   }
   function tierWinP(p, tier, hearts = null) { return tierStats(p, tier, hearts).winP; }
@@ -553,7 +569,10 @@ const BotAI = (() => {
       const tt = MapGrid.get(x, y);
       if (!tSet.has(i)) {
         if (tt === TileType.BOSS) continue;                       // wall
-        if (occupied.has(i)) continue;                             // PvP: other players stop movement
+        if (occupied.has(i)) {                                     // PvP: other players stop movement
+          if (!p.hasPrincess) continue;
+          through += turnLen * 2;                                  // the carrier may have to fight through
+        }
         if (tt === TileType.MINIBOSS && !p.hasUsedTile(x, y) && !cloak) {
           const tier = MapGrid.getTileData(x, y)?.minibossTier ?? 0;
           if (tier > safeT) continue;                              // wall
@@ -629,6 +648,9 @@ const BotAI = (() => {
       if ((p.masterSkillsBought ?? 0) >= Math.min(5, tn.skills)) return;
       for (const s0 of tn.skillOrder.split(',')) { const s = s0 === 'main' ? ms : s0; if (p.baseStats[s] < 6) { list.push({ where:'master', skill:s, cost:50 }); break; } }
     };
+    // Map farmer: travel for Maps when out of them and they let us farm a higher tier than
+    // random rolls would (handleShop tops up to mapStock whenever we're in a shop anyway)
+    if (mapFarm(p) && mapsHeld(p) === 0 && mapsPay(p)) list.push({ where:'shop', id:'map' });
     if (pr.guildExtra && pr.extraFirst && !has(pr.guildExtra)) list.push({ where:'guild', id:pr.guildExtra });
     if (pr.beast && itemVal(eq.charisma, 'C') < 3 && !has('lute') && !has('accordion')) list.push({ where:'shop', id:'lute' });
     const charmInstrument = pr.charm && pr.guildExtra !== 'cursed_rattle';
@@ -646,13 +668,17 @@ const BotAI = (() => {
     if (charmInstrument && itemVal(eq.charisma, 'C') < 6 && !has('accordion')) list.push({ where:'shop', id:'accordion', minTier:6 });
     if (!has('hv_armor') && itemVal(eq.armor, 'A') < 6) list.push({ where:'shop', id:'hv_armor', minTier:4 });
     if (tn.shield && !has('lg_shield') && itemVal(eq.shield, 'A') < 3) list.push({ where:'shop', id:'lg_shield', minTier:2 });
+    if (mapFarm(p)) {                                      // A first: the tank is what makes the Maps pay
+      if (eq.armor && !eq.armor.enchantment && eq.armor.id !== 'invis_cloak' && itemVal(eq.armor, 'A') >= 6) list.push({ where:'master', enchant:'resistance', slot:'armor', cost:50 });
+      if (eq.shield && !eq.shield.enchantment && itemVal(eq.shield, 'A') >= 3) list.push({ where:'master', enchant:'resistance', slot:'shield', cost:50 });
+    }
     if (!speedEarly && wantWEnch) list.push({ where:'master', enchant:wench, slot:wslot, cost: ENCHANTMENTS.find(e => e.id === wench).cost });
     if (pr.guildExtra && !pr.extraFirst && !has(pr.guildExtra)) list.push({ where:'guild', id:pr.guildExtra });
     if (tn.pegasus && !has('pegasus') && itemVal(eq.speed, 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
     if (!tn.skillsEarly) skillStep();
     if (tn.armorEnch && eq.armor && !eq.armor.enchantment && eq.armor.id !== 'invis_cloak' && itemVal(eq.armor, 'A') >= 6) {
       // Arcane only pays off if Armor beats Magic as a defence (true for F/D, often not for mages)
-      const arc = p.getStat('A') > p.getStat('M');
+      const arc = !mapFarm(p) && p.getStat('A') > p.getStat('M');
       list.push({ where:'master', enchant: arc ? 'arcane' : 'resistance', slot:'armor', cost:50 });
     }
     if (tn.shieldRes && eq.shield && !eq.shield.enchantment) list.push({ where:'master', enchant:'resistance', slot:'shield', cost:50 });
@@ -710,7 +736,7 @@ const BotAI = (() => {
     const st = Game.getState();
     const keys = { sp_curse:['masterCurseStock','masterCurseStockResetTurn'], sp_smoke:['masterSmokeStock','masterSmokeStockResetTurn'] }[id];
     if (!keys) return Infinity;
-    return (st.turnNumber - (st[keys[1]] ?? -99)) >= 15 ? 10 : (st[keys[0]] ?? 10);
+    return (st.round - (st[keys[1]] ?? -99)) >= 15 ? 10 : (st[keys[0]] ?? 10);
   }
   function cachedPlan(p) {
     const m = M(p);
@@ -734,6 +760,7 @@ const BotAI = (() => {
     switch (goal.kind) {
       case 'finish':   return tilesOf(TileType.FINISH);
       case 'hunt':     return huntTargets(p);
+      case 'guard':    return tilesOf(TileType.FINISH);
       case 'stage':    return [goal.tile];
       case 'princess': { const pr = Game.getState().princess; return [{ x:pr.x, y:pr.y }]; }
       case 'dragon':   return [bossPos('dragon')];
@@ -748,7 +775,11 @@ const BotAI = (() => {
       case 'shop':     return tilesOf(TileType.SHOP).filter(s => goal.items.every(id => shopMaySell(s, id)) && !M(p).banned[`${s.x},${s.y}`]);
       case 'earn': {
         const out = tilesOf(TileType.CHEST).filter(t => !p.hasUsedTile(t.x, t.y));
-        for (const t of tilesOf(TileType.WORK)) out.push({ x:t.x, y:t.y, bias:-4 });
+        // a Work tile pays once per cycle: visiting a Shop or Master resets them
+        const work = tilesOf(TileType.WORK);
+        for (const t of work) if (!p.hasUsedTile(t.x, t.y)) out.push({ x:t.x, y:t.y, bias:-4 });
+        if (work.some(t => p.hasUsedTile(t.x, t.y)))
+          for (const t of [...tilesOf(TileType.SHOP), ...tilesOf(TileType.MASTER)]) out.push({ x:t.x, y:t.y, bias:4 });
         return out.length ? out : tilesOf(TileType.SHOP);
       }
       case 'refresh':  return [...tilesOf(TileType.SHOP), ...tilesOf(TileType.MASTER)];
@@ -782,8 +813,12 @@ const BotAI = (() => {
     if (p.hasPrincess) yield { kind:'finish' };
     if (st.pvpActive && st.princess && !st.princess.carriedBy && !carrier(p)) yield { kind:'princess' };
     if (st.pvpActive && carrier(p)) {
-      // a rival carries the princess: if healthy enough, hunt them (ambush their route or chase)
-      if (p.hearts.current >= Math.min(3, p.hearts.max)) yield { kind:'hunt' };
+      // a rival carries the princess: stopping them is the only goal left. Top up hearts first
+      // when a heal is on hand, then hunt (ambush their route or chase); if they can't be reached,
+      // camp on the finish so they have to fight us to win.
+      if (p.hearts.current < Math.min(3, p.hearts.max)) { const hg = healGoal(p); if (hg) yield hg; }
+      yield { kind:'hunt' };
+      yield { kind:'guard' };
     }
     if (!st.pvpActive) { const sg = stagingGoal(p); if (sg) yield sg; }
     // stranded near the dragon (no shop or Master reachable, e.g. after a potion trip):
@@ -843,7 +878,7 @@ const BotAI = (() => {
     }
 
     // Dragon: gear done + cloak owned
-    if (list.length === 0) {
+    if (list.length === 0 && !st.dragonDefeated) {
       const go = tune(p).dragonGo;
       let wp = withBossLoadout(p, () => dragonWinP(p, [], 300));
       if (wp >= go - 0.05) wp = withBossLoadout(p, () => dragonWinP(p, [], 1500));   // confirm: avoid charging in on a lucky estimate
@@ -894,7 +929,7 @@ const BotAI = (() => {
   }
 
   // goals that travel straight to a target: skip optional detours, wear the cloak
-  const RUSH = new Set(['dragon', 'boss', 'princess', 'finish']);
+  const RUSH = new Set(['dragon', 'boss', 'princess', 'finish', 'hunt', 'guard']);
   const goalKey = g => JSON.stringify([g.kind, g.tier ?? '', (g.items ?? []).join(), g.what?.id ?? g.what?.enchant ?? g.what?.skill ?? g.id ?? '']);
   function chooseGoal(p) {
     const m = M(p);
@@ -970,14 +1005,15 @@ const BotAI = (() => {
 
   function masterHasCurses() {
     const st = Game.getState();
-    return (st.masterCurseStock ?? 10) > 0 || (st.turnNumber - (st.masterCurseStockResetTurn ?? -99)) >= 15;
+    return (st.masterCurseStock ?? 10) > 0 || (st.round - (st.masterCurseStockResetTurn ?? -99)) >= 15;
   }
 
-  function farmTier(p) {
+  function mapsPay(p) { return farmTier(p, true) > farmTier(p, false); }
+  function farmTier(p, useMap) {
     // Highest tier with good win probability at full health; reward grows with tier.
     let best = 0;
     for (let t = 0; t <= 3; t++) {
-      const { winP, heartsLost } = tierStats(p, t);
+      const { winP, heartsLost } = tierStats(p, t, null, useMap);
       const sustain = p.hasEnchantment('bloodlust') ? 1 : 0;
       if (canAlwaysEscape(p)) { if (fightOK(p, t, p.hearts.max, 0, 0.75)) best = t; continue; }
       if (winP >= tune(p).farmWin && heartsLost - sustain <= tune(p).farmHearts) best = t;
@@ -1020,7 +1056,7 @@ const BotAI = (() => {
       case TileType.STOP:   return used ? 0 : turnLen * 0.5;
       case TileType.WORK: {
         const z = x < 21 ? 1 : x < 31 ? 2 : x < 41 ? 3 : 4;
-        return RUSH.has(goal.kind) ? 0 : -z * 3.5 * 3 * coinStep;
+        return used || RUSH.has(goal.kind) ? 0 : -z * 3.5 * 3 * coinStep;   // used: pays nothing until a Shop/Master visit
       }
       case TileType.PRIEST: return used ? 0 : -2;
       case TileType.BAR:    return goal.kind === 'bar' && p.coins >= 10 ? -(p.hearts.max - p.hearts.current) * 4 : 0;
@@ -1155,6 +1191,7 @@ const BotAI = (() => {
   function keepItem(p, id) {
     if (id === 'pot_heal' || id === 'invis_cloak' || id === 'rope' || id === 'compass' || id === 'sp_curse' || id === 'sp_smoke') return true;
     if (id === 'chain' || id === 'sp_invisibility' || id === 'sp_teleport' || id === 'pot_invis') return true;
+    if (id === 'map') return mapFarm(p);
     if (ATTACK_SPELLS.has(id)) return mainStat(p) === 'M';
     if (id === profile(p).weapon) return true;
     if (p.hasEquipped('invis_cloak') && getItem(id)?.slot === 'armor') return true;
@@ -1207,6 +1244,8 @@ const BotAI = (() => {
       if (p.coins >= it.cost) { M(p).banned = {}; return act({ type:'buy', itemId:it.id }); }
       break;
     }
+    if (mapFarm(p) && avail('map') && mapsHeld(p) < tune(p).mapStock && p.coins >= getItem('map').buyPrice && mapsPay(p))
+      return act({ type:'buy', itemId:'map' });
     if (M(p).goal?.heal && avail('pot_heal')) {
       const need = p.hearts.max - p.hearts.current - p.inventory.filter(x => x === 'pot_heal').length;
       if (need > 0 && p.coins >= 50) return act({ type:'buy', itemId:'pot_heal' });
@@ -1583,13 +1622,18 @@ const BotAI = (() => {
     const st = Game.getState(); if (!st.pvpActive) return null;
     const q = rivals(p).find(r => r.position.x === x && r.position.y === y);
     if (!q) return null;
-    if (goal.kind === 'hunt' && q === carrier(p)) {       // the whole point: attack the carrier
+    if ((goal.kind === 'hunt' || goal.kind === 'guard') && q === carrier(p)) {   // the whole point: attack the carrier
+      // if they get through we lose anyway: take long odds (but don't just feed them our gear)
       const w = pvpWinP(p, q);
-      return w >= 0.25 ? -40 - 60 * w : 200;
+      return w >= 0.15 ? -40 - 60 * w : 200;
     }
     if (!p.hasPrincess && st.princess && !st.princess.carriedBy && st.princess.x === x && st.princess.y === y) {
       const w = pvpWinP(p, q);                             // someone stands on the free princess
       return w >= 0.5 ? -30 : 1000;
+    }
+    if (p.hasPrincess) {                                   // someone stands in the carrier's way
+      const w = pvpWinP(p, q);
+      return w >= 0.5 ? -20 : w >= 0.3 ? 150 : 1000;
     }
     return 1000;                                           // don't start pointless fights
   }
@@ -1775,7 +1819,17 @@ const BotAI = (() => {
         return d ? act({ type:'teleport_confirm', dest:d }) : act({ type:'close' });
       }
       case P.PVP_COMBAT:      return pvpTick();
-      case P.MAP_CHOICE:      return act({ type:'map_roll', value:6 });
+      case P.MAP_CHOICE: {
+        // miniboss: the Map picks the roll — take the tier's best mob for us. Map farmers save
+        // their Maps for minibosses; others use them on any roll (6 = best chest/event result).
+        const { x, y } = player.position;
+        const sneaking = (player.hasEquipped('invis_cloak') || player.invisPotion) && m.goal?.kind !== 'farm';
+        if (MapGrid.get(x, y) === TileType.MINIBOSS && !(mapFarm(player) && sneaking)) {
+          const tier = MapGrid.getTileData(x, y)?.minibossTier ?? 0;
+          return act({ type:'map_roll', value: tierStats(player, tier, player.hearts.current, true).pick + 1 });
+        }
+        return mapFarm(player) ? act({ type:'map_skip' }) : act({ type:'map_roll', value:6 });
+      }
       case P.CHEST: {
         const rolls = state.pendingChestRolls ?? [];
         return act({ type:'chest_pick', value: rolls.length ? Math.max(...rolls) : 6 });
