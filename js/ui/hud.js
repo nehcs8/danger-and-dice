@@ -75,14 +75,15 @@ const HUD = (() => {
     if (!player) return;
 
     const phase = data.phase ?? Game.getState().phase;
-    const readOnly = player !== cur || player.isBot;  // someone else's turn / a bot: look, don't touch
+    const over     = phase === Game.Phase.GAME_OVER;
+    const readOnly = over || player !== cur || player.isBot;  // someone else's turn / a bot / game over: look, don't touch
 
     _el('player-name-display').textContent = player.name + (player.isBot ? ' 🤖' : '');
     _el('hearts-display').innerHTML  = heartsHTML(player.hearts);
     _el('coins-display').textContent = `💰 ${player.coins}` + (player.invisPotion ? `  👻×${player.invisPotion}` : '');
     _el('stats-display').innerHTML   = statsHTML(player);
     _el('equipped-display').innerHTML = equippedHTML(player, readOnly);
-    _el('turn-info').textContent     = readOnly ? `⏳ ${cur?.name ?? '—'}'s turn — ${phaseLabel(phase)}` : phaseLabel(phase);
+    _el('turn-info').textContent     = over ? 'Game over' : readOnly ? `⏳ ${cur?.name ?? '—'}'s turn — ${phaseLabel(phase)}` : phaseLabel(phase);
     _el('inventory-list').innerHTML  = inventoryHTML(player, phase, readOnly);
     _el('other-players-display').innerHTML = '';
     _el('btn-open-inventory').disabled = readOnly;
@@ -90,6 +91,7 @@ const HUD = (() => {
     const rollBtn = _el('btn-roll');
     const blocked = phase === Game.Phase.STOP_BLOCKED;
     rollBtn.disabled  = readOnly || (phase !== Game.Phase.ROLL_MOVE && !blocked);
+    rollBtn.classList.toggle('hidden', over);
     rollBtn.textContent = blocked ? 'End Turn (Blocked)' : 'Roll Movement';
 
     refreshInventoryPopup();

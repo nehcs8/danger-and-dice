@@ -108,7 +108,7 @@
       // Always update the top-bar turn counter on every new player turn
       if (data.phase === Game.Phase.ROLL_MOVE) {
         const el = $('spectate-turn');
-        if (el) el.textContent = `Turn ${Game.getState().turnNumber}`;
+        if (el) el.textContent = `Turn ${Game.getState().round}`;
       }
 
       // Auto-trigger for bots
@@ -202,8 +202,12 @@
     $('btn-close-inventory').addEventListener('click', () => HUD.closeInventoryPopup());
 
     Game.on('game_over', data => {
+      HUD.update({ phase: Game.Phase.GAME_OVER });
+      Renderer.draw();
       Panels.showGameOver(data);
     });
+    $('btn-view-map').addEventListener('click', () => Panels.hideGameOver());
+    $('btn-show-results').addEventListener('click', () => Panels.reopenGameOver());
 
     // Roll button (also ends turn when stop-blocked)
     function doRoll() {

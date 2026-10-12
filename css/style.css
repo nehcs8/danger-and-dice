@@ -1547,3 +1547,13 @@ body {
 .good { color: #8fe08f; }
 .bad { color: #ff8a8a; }
 .act-raw { margin-top: 3px; padding: 3px 6px; background: #0c0c16; color: #8a8270; font-size: 0.7rem; border-radius: 4px; }
+
+/* Game over: close the results to inspect the board, reopen from the left panel */
+.gameover-actions { display: flex; gap: 10px; justify-content: center; }
+#btn-view-map {
+  font-size: 1rem; padding: 8px 24px;
+  background: #2a2a4a; color: #ffd700; border: 1px solid #ffd700; border-radius: 3px;
+  cursor: pointer; font-weight: bold;
+}
+#btn-view-map:hover { background: #3a3a5a; }
+.action-btn.hidden { display: none; }

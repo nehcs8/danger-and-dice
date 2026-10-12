@@ -1238,9 +1238,9 @@ const Panels = (() => {
     function getMasterStock(itemId) {
       const keys = MASTER_LIMITED_KEYS[itemId];
       if (!keys) return null;
-      const restocked = gs.turnNumber - gs[keys.resetKey] >= 15;
+      const restocked = gs.round - gs[keys.resetKey] >= 15;
       const avail     = restocked ? 10 : gs[keys.stockKey];
-      const turns     = restocked ? 0  : 15 - (gs.turnNumber - gs[keys.resetKey]);
+      const turns     = restocked ? 0  : 15 - (gs.round - gs[keys.resetKey]);
       return { avail, turns, soldOut: avail <= 0 };
     }
     [...COMBAT_SPELLS, ...UTILITY_SPELLS].forEach(item => {
@@ -1414,6 +1414,18 @@ const Panels = (() => {
     _buildSaveSection(_el('gameover-save'), data, summary);
   }
 
+  // Close the results to look over the final map and inventories; the left-panel
+  // "Show Results" button brings them back (content and save form are kept).
+  function hideGameOver() {
+    hideAll();
+    _el('btn-show-results').classList.remove('hidden');
+  }
+
+  function reopenGameOver() {
+    _el('btn-show-results').classList.add('hidden');
+    showModal('modal-gameover');
+  }
+
   function _buildSaveSection(container, data, summary) {
     container.innerHTML = '';
 
@@ -1523,5 +1535,5 @@ const Panels = (() => {
 
   function _el(id) { return document.getElementById(id); }
 
-  return { init, handlePhase, showGameOver, refreshShop, refreshMaster };
+  return { init, handlePhase, showGameOver, hideGameOver, reopenGameOver, refreshShop, refreshMaster };
 })();

@@ -34,6 +34,7 @@ const Game = (() => {
     currentIdx:       0,
     setupRollIdx:     0,
     turnNumber:       0,
+    round:            1,  // full table rotations (display); turnNumber counts single player turns
     difficulty:       'medium',
     movementCap:      0,
     reachableTiles:   null,   // Map<"x,y", steps> from Movement
@@ -59,9 +60,9 @@ const Game = (() => {
     currentShopPosition:    null, // { x, y } of the shop tile the current player is visiting
     rerollUsedThisTurn:     new Set(), // "x,y" keys of reroll tiles already triggered this turn
     masterSmokeStock:       10,   // Smoke spell stock at the Master (resets every 15 turns)
-    masterSmokeStockResetTurn: 0, // turnNumber when smoke stock was last reset
+    masterSmokeStockResetTurn: 0, // round when smoke stock was last reset
     masterCurseStock:       10,   // Curse spell stock at the Master (resets every 15 turns)
-    masterCurseStockResetTurn: 0, // turnNumber when curse stock was last reset
+    masterCurseStockResetTurn: 0, // round when curse stock was last reset
   };
 
   // ── Event bus ─────────────────────────────────────────────────────────────
@@ -75,12 +76,14 @@ const Game = (() => {
   function current() { return state.players[state.currentIdx]; }
 
   function nextTurn() {
+    const prevIdx = state.currentIdx;
     state.currentIdx = (state.currentIdx + 1) % state.players.length;
     // Skip dead players
     let safety = state.players.length;
     while (!current().isAlive && safety-- > 0) {
       state.currentIdx = (state.currentIdx + 1) % state.players.length;
     }
+    if (state.currentIdx <= prevIdx) state.round++;  // wrapped past the last seat
     state.turnNumber++;
     startTurn();
   }
@@ -232,6 +235,7 @@ const Game = (() => {
     state.setupRollIdx = 0;
     state.currentIdx   = 0;
     state.turnNumber   = 0;
+    state.round        = 1;
     state.difficulty   = difficulty;
     state.masterSmokeStock          = 10;
     state.masterSmokeStockResetTurn = 0;
@@ -288,6 +292,7 @@ const Game = (() => {
       state.setupRollIdx = 0;
       state.currentIdx   = 0;
       state.turnNumber   = 0;
+      state.round        = 1;
       startTurn();
     } else {
       const next = state.players[state.setupRollIdx];
@@ -998,9 +1003,9 @@ const Game = (() => {
     };
     if (MASTER_LIMITED[itemId] && !state.currentShopPosition) {
       const { stockKey, resetKey, name } = MASTER_LIMITED[itemId];
-      if (state.turnNumber - state[resetKey] >= 15) {
+      if (state.round - state[resetKey] >= 15) {
         state[stockKey] = 10;
-        state[resetKey] = state.turnNumber;
+        state[resetKey] = state.round;
       }
       if (state[stockKey] <= 0) {
         emit('error', { message: `${name} is sold out — restocks every 15 turns` });
