@@ -1,0 +1,69 @@
+== BASE (bug fixes only)
+F                                                            mean  123.2  median  103  kill-median   96  deaths 17/100  timeouts 0
+D                                                            mean  135.1  median  109  kill-median  105  deaths 21/100  timeouts 0
+FB                                                           mean  130.7  median  109  kill-median  106  deaths 16/100  timeouts 0
+DB                                                           mean  157.1  median  131  kill-median  123  deaths 26/100  timeouts 0
+DG                                                           mean  111.1  median   90  kill-median   88  deaths 13/100  timeouts 0
+DBG                                                          mean  126.8  median  109  kill-median  106  deaths 13/100  timeouts 0
+M                                                            mean  133.9  median  117  kill-median  113  deaths 14/100  timeouts 0
+G                                                            mean  131.3  median  106  kill-median  104  deaths 18/100  timeouts 0
+GB                                                           mean  158.9  median  138  kill-median  133  deaths 22/100  timeouts 0
+BP                                                           mean  130.7  median  127  kill-median  125  deaths 5/100  timeouts 0
+DT                                                           mean  162.1  median  147  kill-median  143  deaths 17/100  timeouts 0
+SS                                                           mean  173.3  median  163  kill-median  143  deaths 25/100  timeouts 1
+BB                                                           mean  121.6  median   94  kill-median   90  deaths 14/100  timeouts 4
+BM                                                           mean  118.3  median  100  kill-median   95  deaths 14/100  timeouts 0
+CH                                                           mean  122.0  median   94  kill-median   92  deaths 18/100  timeouts 0
+CR                                                           mean  133.8  median  102  kill-median   97  deaths 23/100  timeouts 0
+(1391s)
+== DEV2 (A enchants + B bloodlust + C ladder + D CH trade)
+F                                                            mean  102.2  median   86  kill-median   85  deaths 9/100  timeouts 0
+D                                                            mean  113.8  median   90  kill-median   87  deaths 16/100  timeouts 0
+FB                                                           mean  112.4  median   92  kill-median   90  deaths 13/100  timeouts 0
+DB                                                           mean  116.5  median   98  kill-median   95  deaths 13/100  timeouts 0
+DG                                                           mean  101.2  median   83  kill-median   81  deaths 11/100  timeouts 0
+DBG                                                          mean  105.4  median   84  kill-median   83  deaths 12/100  timeouts 0
+M                                                            mean  146.2  median  137  kill-median  135  deaths 9/100  timeouts 0
+G                                                            mean  114.9  median   90  kill-median   84  deaths 17/100  timeouts 0
+GB                                                           mean  123.8  median  101  kill-median   96  deaths 17/100  timeouts 0
+BP                                                           mean  113.7  median  100  kill-median   99  deaths 10/100  timeouts 0
+DT                                                           mean  167.4  median  155  kill-median  149  deaths 17/100  timeouts 0
+SS                                                           mean  154.4  median  125  kill-median  115  deaths 25/100  timeouts 0
+BB                                                           mean  194.4  median  250  kill-median   92  deaths 13/100  timeouts 50
+BM                                                           mean  133.8  median   97  kill-median   88  deaths 27/100  timeouts 0
+CH                                                           mean  102.1  median   79  kill-median   78  deaths 14/100  timeouts 0
+CR                                                           mean  113.2  median   88  kill-median   84  deaths 17/100  timeouts 0
+(924s)
+== DEV2 ablations
+FB old safety                                                mean  108.6  median   91  kill-median   89  deaths 11/100  timeouts 0
+DB old safety                                                mean  122.3  median   98  kill-median   94  deaths 17/100  timeouts 0
+DBG old safety                                               mean  109.0  median   88  kill-median   85  deaths 13/100  timeouts 0
+GB old safety                                                mean  118.6  median   99  kill-median   97  deaths 14/100  timeouts 0
+FB bolder                                                    mean  121.0  median   94  kill-median   89  deaths 19/100  timeouts 0
+DB bolder                                                    mean  128.7  median  103  kill-median   95  deaths 21/100  timeouts 0
+GB bolder                                                    mean  122.6  median  101  kill-median   97  deaths 16/100  timeouts 0
+G no ladder                                                  mean  111.6  median   90  kill-median   85  deaths 15/100  timeouts 0
+GB no ladder                                                 mean  119.1  median  101  kill-median   96  deaths 14/100  timeouts 0
+BP no ladder                                                 mean  105.3  median   99  kill-median   98  deaths 4/100  timeouts 0
+DT no ladder                                                 mean  161.0  median  155  kill-median  154  deaths 6/100  timeouts 0
+G ladder@0.85                                                mean  114.9  median   90  kill-median   84  deaths 17/100  timeouts 0
+BP ladder@0.85                                               mean  113.7  median  100  kill-median   99  deaths 10/100  timeouts 0
+DT ladder@0.85                                               mean  168.8  median  155  kill-median  149  deaths 19/100  timeouts 0
+F extraEnch off                                              mean  123.2  median  103  kill-median   96  deaths 17/100  timeouts 0
+F extraEnch A                                                mean  110.8  median   93  kill-median   91  deaths 12/100  timeouts 0
+F extraEnch sim                                              mean  129.1  median  119  kill-median  115  deaths 9/100  timeouts 0
+D extraEnch off                                              mean  135.1  median  109  kill-median  105  deaths 21/100  timeouts 0
+D extraEnch A                                                mean  120.5  median   99  kill-median   97  deaths 14/100  timeouts 0
+D extraEnch sim                                              mean  151.8  median  130  kill-median  122  deaths 22/100  timeouts 0
+M extraEnch off                                              mean  152.8  median  132  kill-median  126  deaths 19/100  timeouts 0
+M extraEnch A                                                mean  146.2  median  137  kill-median  135  deaths 9/100  timeouts 0
+M extraEnch sim                                              mean  224.3  median  245  kill-median  207  deaths 10/100  timeouts 30
+DG extraEnch off                                             mean  111.1  median   90  kill-median   88  deaths 13/100  timeouts 0
+DG extraEnch A                                               mean  119.0  median   95  kill-median   93  deaths 16/100  timeouts 0
+DG extraEnch sim                                             mean  128.7  median  113  kill-median  111  deaths 12/100  timeouts 0
+CH extraEnch off                                             mean  119.1  median   95  kill-median   92  deaths 16/100  timeouts 0
+CH extraEnch A                                               mean  123.5  median   91  kill-median   87  deaths 22/100  timeouts 0
+CH extraEnch sim                                             mean  128.1  median  104  kill-median   97  deaths 18/100  timeouts 0
+CH kill bosses (old)                                         mean  108.6  median   81  kill-median   79  deaths 17/100  timeouts 0
+CH no bosses                                                 mean  100.5  median   79  kill-median   76  deaths 14/100  timeouts 0
+(3101s)

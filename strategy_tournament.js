@@ -4,7 +4,7 @@
 // a summary report.
 //
 // Usage:
-//   node strategy_tournament.js [--workers 8] [--max-turns 1600] [--strategies F,D,...] [--require BM] [--limit N] [--out dir]
+//   node strategy_tournament.js [--workers 8] [--max-turns 1600] [--strategies F,D,...] [--require BM] [--limit N] [--seed N] [--out dir] [--resume]
 //   node strategy_tournament.js --replay <seed> <S1,S2,S3,S4> [--max-turns 1600]   → full log of one game to stdout
 //   node strategy_tournament.js --report <dir>                                    → rebuild summary from games.jsonl
 'use strict';
@@ -19,7 +19,7 @@ const STAT_KEYS = ['F','D','A','M','C','V'];
 // ════════════════════════════════════════════════════════════════════════════
 // onReady(Game, BotAI): optional hook for ad-hoc probes; it runs before Game.init.
 function runGame({ seed, lineup, maxTurns = 1600, fullLog = false, onReady = null }) {
-  const sb = makeSandbox('js/engine/bot_v2.js', [], seed);
+  const sb = makeSandbox(process.env.BOT_FILE ?? 'js/engine/bot_v2.js', [], seed);   // BOT_FILE: test a working copy
   const Game = get(sb, 'Game'), BotAI = get(sb, 'BotAI'), KB = get(sb, 'KingBattle'), Ph = Game.Phase;
   const getItem = get(sb, 'getItem'), dbg = BotAI._debug;
   const players = lineup.map((s, i) => ({ id:`p${i}`, name:`Bot${i+1}`, isBot:true }));
@@ -326,40 +326,54 @@ if (process.argv[2] === '--worker') {
   delete r.fullLog; delete r.lastLog;
   console.log('\n' + JSON.stringify({ ...r, bots: r.bots.map(b => ({ ...b, series: `${b.series.length} rows` })) }, null, 1));
 } else if (process.argv[2] === '--report') {
-  const dir = process.argv[3];
-  const games = fs.readFileSync(path.join(dir, 'games.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  const dir = process.argv[3];   // extra dirs after it are merged in (e.g. the same tournament run with another --seed)
+  const games = process.argv.slice(3).filter(d => !d.startsWith('--')).flatMap(d =>
+    fs.readFileSync(path.join(d, 'games.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)));
   const { md } = report(games); fs.writeFileSync(path.join(dir, 'summary.md'), md); console.log(md);
 } else if (require.main === module) {
   const strats = (arg('strategies', ALL_STRATS.join(','))).split(',');
-  const workers = +arg('workers', require('os').cpus().length);
+  const workers = +arg('workers', Math.min(6, require('os').cpus().length));   // keep the machine usable
   const maxTurns = +arg('max-turns', 1600);
-  let tasks = buildTasks(strats);
+  let tasks = buildTasks(strats, +arg('seed', 20261011));
   if (arg('require')) tasks = tasks.filter(t => t.lineup.includes(arg('require')));   // only line-ups with this strategy
   if (arg('limit')) tasks = tasks.slice(0, +arg('limit'));
   const out = arg('out', path.join('results', `tournament_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`));
   fs.mkdirSync(out, { recursive: true });
-  const jsonl = fs.createWriteStream(path.join(out, 'games.jsonl'));
-  console.log(`${tasks.length} games, ${workers} workers → ${out}`);
-  const t0 = Date.now(), results = [];
+  // --resume: keep the games already in <out>/games.jsonl and run only the missing ones
+  const prev = process.argv.includes('--resume') && fs.existsSync(path.join(out, 'games.jsonl'))
+    ? fs.readFileSync(path.join(out, 'games.jsonl'), 'utf8').split('\n').filter(l => l.trim()).flatMap(l => { try { return [JSON.parse(l)]; } catch { return []; } })
+    : [];
+  const doneIdx = new Set(prev.map(r => r.idx));
+  tasks = tasks.filter(t => !doneIdx.has(t.idx));
+  if (prev.length) fs.writeFileSync(path.join(out, 'games.jsonl'), prev.map(r => JSON.stringify(r)).join('\n') + '\n');   // drops a truncated last line
+  const jsonl = fs.createWriteStream(path.join(out, 'games.jsonl'), { flags: prev.length ? 'a' : 'w' });
+  console.log(`${tasks.length} games${prev.length ? ` (+${prev.length} resumed)` : ''}, ${workers} workers → ${out}`);
+  const t0 = Date.now(), results = prev.slice();
   let next = 0, done = 0;
-  const pool = Array.from({ length: Math.min(workers, tasks.length) }, () => fork(__filename, ['--worker']));
-  const feed = w => { if (next < tasks.length) w.send({ ...tasks[next++], maxTurns }); else w.send(null); };
-  pool.forEach(w => {
+  // Every game builds a fresh vm sandbox and a long-lived worker doesn't give that memory back
+  // (2–3 GB per worker after a few hundred games): recycle workers every RECYCLE games, cap the heap.
+  const RECYCLE = 25;
+  let live = 0;
+  const spawn = () => {
+    const w = fork(__filename, ['--worker'], { execArgv: ['--max-old-space-size=1024'] });
+    live++; let n = 0;
+    const feed = () => { if (next < tasks.length && n++ < RECYCLE) w.send({ ...tasks[next++], maxTurns }); else w.send(null); };
     w.on('message', r => {
       results.push(r); jsonl.write(JSON.stringify(r) + '\n'); done++;
       process.stdout.write(`\r${done}/${tasks.length}  ${((Date.now() - t0) / 1000).toFixed(0)}s  last: [${r.lineup.join(',')}] ${r.outcome} ${r.winnerStrategy ?? ''} T${r.turns}      `);
-      feed(w);
+      feed();
     });
-    feed(w);
-  });
-  let exited = 0;
-  pool.forEach(w => w.on('exit', () => {
-    if (++exited < pool.length) return;
+    w.on('exit', () => { live--; if (next < tasks.length) spawn(); else if (live === 0) finish(); });
+    feed();
+  };
+  for (let k = 0; k < Math.min(workers, tasks.length); k++) spawn();
+  if (!tasks.length) finish();
+  function finish() {
     jsonl.end();
     results.sort((a, b) => a.idx - b.idx);
     const { md } = report(results);
     fs.writeFileSync(path.join(out, 'summary.md'), md);
     console.log(`\n\nDone in ${((Date.now() - t0) / 1000).toFixed(0)}s. Summary: ${path.join(out, 'summary.md')}`);
-  }));
+  }
 }
 module.exports = { runGame, report, buildTasks };

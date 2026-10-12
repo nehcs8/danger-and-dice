@@ -59,6 +59,7 @@ const Game = (() => {
     shopStocks:             {},   // keyed by "x,y" → { itemId: 1 } (0/missing = sold out)
     currentShopPosition:    null, // { x, y } of the shop tile the current player is visiting
     rerollUsedThisTurn:     new Set(), // "x,y" keys of reroll tiles already triggered this turn
+    moveTrails:             {},   // player id → [{x,y}, …] tiles walked, oldest first (for BACK tiles)
     masterSmokeStock:       10,   // Smoke spell stock at the Master (resets every 15 turns)
     masterSmokeStockResetTurn: 0, // round when smoke stock was last reset
     masterCurseStock:       10,   // Curse spell stock at the Master (resets every 15 turns)
@@ -237,6 +238,7 @@ const Game = (() => {
     state.turnNumber   = 0;
     state.round        = 1;
     state.difficulty   = difficulty;
+    state.moveTrails   = {};
     state.masterSmokeStock          = 10;
     state.masterSmokeStockResetTurn = 0;
     state.masterCurseStock          = 10;
@@ -494,6 +496,34 @@ const Game = (() => {
   }
 
   // ── Move ──────────────────────────────────────────────────────────────────
+  // Append a walked segment to the player's trail. A jump (teleport, start)
+  // breaks continuity, so the trail restarts from the segment's origin.
+  const TRAIL_MAX = 40;
+  function recordTrail(player, from, path) {
+    let trail = state.moveTrails[player.id];
+    const last = trail?.at(-1);
+    if (!last || last.x !== from.x || last.y !== from.y) trail = [{ ...from }];
+    for (const t of path) trail.push({ x: t.x, y: t.y });
+    if (trail.length > TRAIL_MAX) trail.splice(0, trail.length - TRAIL_MAX);
+    state.moveTrails[player.id] = trail;
+  }
+
+  // Tiles a BACK tile sends the player through, newest first, up to n steps.
+  // During PvP, stops on the first tile held by another living player (forced fight).
+  function goBackPath(player, n) {
+    const trail = state.moveTrails[player.id] ?? [];
+    const last  = trail.at(-1);
+    if (!last || last.x !== player.position.x || last.y !== player.position.y) return [];
+    const back = [];
+    for (let i = trail.length - 2; i >= 0 && back.length < n; i--) {
+      const t = trail[i];
+      back.push({ ...t });
+      if (state.pvpActive && state.players.some(q => q !== player && q.isAlive &&
+          q.position.x === t.x && q.position.y === t.y)) break;
+    }
+    return back;
+  }
+
   function handleMove(dest) {
     const player   = current();
     const destKey  = `${dest.x},${dest.y}`;
@@ -523,6 +553,7 @@ const Game = (() => {
         player.position = { ...stopTile };
         player.markTileUsed(stopTile.x, stopTile.y);
         const upToStop = movePath.slice(0, movePath.findIndex(t => t.x === stopTile.x && t.y === stopTile.y) + 1);
+        recordTrail(player, moveFrom, upToStop.length ? upToStop : [stopTile]);
         emit('player_moved', { player: player.name, position: stopTile, from: moveFrom, path: upToStop.length ? upToStop : [stopTile] });
 
         const roll = Dice.d6();
@@ -536,6 +567,7 @@ const Game = (() => {
           if (stopTile.x !== dest.x || stopTile.y !== dest.y) {
             player.position = { ...dest };
             const afterStop = movePath.slice(movePath.findIndex(t => t.x === stopTile.x && t.y === stopTile.y) + 1);
+            recordTrail(player, stopTile, afterStop.length ? afterStop : [dest]);
             emit('player_moved', { player: player.name, position: dest, from: { ...stopTile }, path: afterStop.length ? afterStop : [dest] });
           }
           if (maybeStartPvp(player)) return;
@@ -549,6 +581,7 @@ const Game = (() => {
     const tilesWalked = state.reachableTiles.get(destKey) ?? 0;
     player.position = { ...dest };
     log(`${player.name} → (${dest.x},${dest.y}) [roll ${state.movementCap}]`);
+    recordTrail(player, moveFrom, movePath);
     emit('player_moved', { player: player.name, position: dest, from: moveFrom, path: movePath });
     player.gainXP('V', tilesWalked / 10);
     player.gainXP('A', Math.min(2, tilesWalked / calcInventoryWeight(player)));
@@ -658,10 +691,22 @@ const Game = (() => {
 
       case TileType.BACK: {
         const n = tData.backAmount ?? 1;
-        log(`${player.name} goes back ${n} tiles`);
-        // Move player back n steps along path (simplified: snap to nearest walkable tile)
-        // Full pathfinding-back is handled by UI; here we just emit the event
-        emit('go_back', { player: player.name, steps: n });
+        // Retrace the tiles just walked; the landing tile's event fires
+        const back = goBackPath(player, n);
+        if (back.length) {
+          const from = { ...player.position };
+          const to   = back.at(-1);
+          player.position = { ...to };
+          const trail = state.moveTrails[player.id];
+          trail.length -= back.length;
+          log(`${player.name} goes back ${back.length} tile${back.length === 1 ? '' : 's'} → (${to.x},${to.y})`);
+          emit('player_moved', { player: player.name, position: to, from, path: back });
+          if (maybeStartPvp(player)) break;
+          if (state.pvpActive && !state.princess.carriedBy) pickUpPrincess(player);
+          resolveTileEvent();
+          break;
+        }
+        log(`${player.name} would go back ${n} tiles, but has nowhere to go`);
         endTileInteraction();
         break;
       }
@@ -1529,6 +1574,7 @@ const Game = (() => {
     function onDefeat() {
       log(`${player.name} is slain in the King's Hall.`);
       player.isAlive = false;
+      if (player.hasPrincess) dropPrincess(player);   // she stays on the tile for the others
       emit('player_defeated', { player: player.name });
       checkGameOver();
       if (state.phase !== Phase.GAME_OVER) endTileInteraction();
@@ -1694,6 +1740,7 @@ const Game = (() => {
     } else {
       log(`${player.name} is defeated by ${mob.name}`);
       player.isAlive = false;
+      if (player.hasPrincess) dropPrincess(player);   // she stays on the tile for the others
       emit('player_defeated', { player: player.name });
       checkGameOver();
       if (state.phase !== Phase.GAME_OVER) endTileInteraction();
@@ -1905,6 +1952,7 @@ const Game = (() => {
       endTileInteraction();
     } else {
       player.isAlive = false;
+      if (player.hasPrincess) dropPrincess(player);   // she stays on the tile for the others
       emit('player_defeated', { player: player.name });
       checkGameOver();
       if (state.phase !== Phase.GAME_OVER) endTileInteraction();

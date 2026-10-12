@@ -119,7 +119,7 @@ Key events: `state_change`, `log`, `player_moved`, `setup_rolled`, `combat_updat
 | 5 | REROLL | Roll extra movement, player moves again |
 | 6 | WORK | Earn zone × base_stat × d6 coins |
 | 7 | STOP | Must roll >3 at turn start to leave |
-| 8 | BACK | Go back `tileData.backAmount` tiles |
+| 8 | BACK | Retrace `tileData.backAmount` tiles along the player's walked trail (`state.moveTrails`, spans turns, reset by jumps); the landing tile's event fires; in PvP, stops on (and fights) the first player in the way |
 | 9 | PRIEST | Receive a Holy Blessing potion (+N all stats for one roll) |
 | 10 | SHOP | Buy/sell equipment, potions, objects |
 | 11 | MASTER | Buy skill points, enchant equipment, buy spells |
@@ -361,8 +361,6 @@ Always active (not just in all-bot mode). Speed controls are only shown in all-b
 - **SpectateStats**: per-player metrics, canvas charts, milestone tracking, game-over recap, JSON run export
 
 ### Pending / Known Issues
-
-**BACK tile** — `game.js` emits a `go_back` event with step count but does not actually move the player. Needs implementation: BFS-based reverse path, or snap to nearest walkable tile n steps back.
 
 **Multiple start positions** — Only `{x:6, y:2}` defined for player 1. Players 2–4 all start at same tile. Need 3 more start positions near the START tile.
 

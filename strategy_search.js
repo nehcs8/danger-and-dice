@@ -29,11 +29,13 @@ const SPACE = {
   kitMargin: [0, 0.05, 0.1],
   stockpileCoins: [100, 150, 250, 400, 600],
   curseCap: [10, 16, 24, 30],
+  extraEnch: ['main', 'A', 'sim', false],      // enchants on the non-weapon/armor/shield items
+  guildLadder: [true, false], guildFarmWin: [0.85, 0.9, 0.93, 0.97],
 };
 // Today's hand-written behaviour (DEFAULT_TUNE) expressed in the search space
 const DEFAULTS = { shield:true, shieldRes:true, armorEnch:true, pegasus:true, accordion:true, cloak:true, rope:true,
   speedEarly:null, skills:5, skillOrder:'main,A,V', skillsEarly:false, farmWin:0.97, farmHearts:1.3, healMissing:2,
-  dragonGo:0.85, kitMargin:0.05, stockpileCoins:250, curseCap:24 };
+  dragonGo:0.85, kitMargin:0.05, stockpileCoins:250, curseCap:24, extraEnch:'main', guildLadder:true, guildFarmWin:0.9 };
 
 // genome → the object the bot reads
 // Only parameters that differ from the defaults are sent, so profile-specific defaults
@@ -54,7 +56,7 @@ function describe(g) {
 // ── one solo game, stopped at the dragon kill ──────────────────────────────
 // inspect(Game, BotAI, player): optional hook run at the end, for debugging probes
 function runSolo(genome, seed, inspect = null, onLog = null) {
-  const sb = makeSandbox('js/engine/bot_v2.js', [], seed);
+  const sb = makeSandbox(process.env.BOT_FILE ?? 'js/engine/bot_v2.js', [], seed);   // BOT_FILE: test a working copy
   const Game = get(sb, 'Game'), BotAI = get(sb, 'BotAI'), KB = get(sb, 'KingBattle'), Ph = Game.Phase;
   const queue = [];
   let turns = 0, done = null;
@@ -98,20 +100,26 @@ function runSolo(genome, seed, inspect = null, onLog = null) {
 }
 
 // ── worker pool ─────────────────────────────────────────────────────────────
+// Each game builds a fresh vm sandbox and a long-lived worker doesn't give that memory back
+// (2–3 GB per worker after a few hundred games): replace a worker after RECYCLE jobs, cap the heap.
+const RECYCLE = 25;
 function makePool(n) {
-  const workers = Array.from({ length: n }, () => fork(__filename, ['--worker']));
-  const idle = workers.slice(), waiting = [];
+  const mk = () => { const w = fork(__filename, ['--worker'], { execArgv: ['--max-old-space-size=1024'] }); w.jobs = 0; return w; };
+  const idle = Array.from({ length: n }, mk);
   let pendingJobs = [];
   function pump() {
     while (idle.length && pendingJobs.length) {
       const w = idle.pop(), job = pendingJobs.shift();
-      w.once('message', r => { idle.push(w); job.resolve(r); pump(); });
+      w.once('message', r => {
+        if (++w.jobs >= RECYCLE) { w.send(null); idle.push(mk()); } else idle.push(w);
+        job.resolve(r); pump();
+      });
       w.send(job.task);
     }
   }
   return {
     run(tasks) { return Promise.all(tasks.map(task => new Promise(resolve => { pendingJobs.push({ task, resolve }); pump(); }))); },
-    close() { workers.forEach(w => w.send(null)); },
+    close() { idle.forEach(w => w.send(null)); },
   };
 }
 
@@ -161,7 +169,7 @@ async function halving(pool, genomes, rounds = [6, 12, 24, 48]) {
 
 async function main() {
   const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 ? process.argv[i + 1] : d; };
-  const workers = +arg('workers', require('os').cpus().length);
+  const workers = +arg('workers', Math.min(6, require('os').cpus().length));   // keep the machine usable
   const pool = makePool(workers);
 
   if (process.argv.includes('--eval')) {

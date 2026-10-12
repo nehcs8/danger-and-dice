@@ -655,10 +655,24 @@ const BotAI = (() => {
     if (canAlwaysEscape(p)) return hearts >= 2 && tierWinP(p, tier, hearts - 1) >= needEscape;
     return tierWinP(p, tier, hearts) >= need;
   }
+  // Win probability needed to walk THROUGH a miniboss (land on it and fight). Shared by the
+  // potential field and landingAdjust: if they disagree the bot paths through a miniboss it
+  // then refuses to land on, and ping-pongs forever. A bot with no reachable goal (boxed in by
+  // minibosses at low hearts, no heal in reach) gradually accepts riskier fights to get out.
+  function walkNeed(p) {
+    const base = p.hasPrincess ? 0.6 : 0.95;
+    return Math.max(0.6, base - Math.min(0.35, 0.03 * (M(p).stuckTurns ?? 0)));
+  }
+  // Step-cost of the risk of fighting a tier-`tier` miniboss we walk through. Charged both by the
+  // field and by landingAdjust: if only the landing paid it, standing next to the miniboss would
+  // score better than stepping on it and the bot would wait there forever.
+  function walkRisk(p, tier) {
+    return canAlwaysEscape(p) ? (1 - tierWinP(p, tier, p.hearts.current - 1)) * 30 : (1 - tierWinP(p, tier, p.hearts.current)) * 400;
+  }
   function safeMinibossTier(p) {
     // highest tier we may walk THROUGH (land on and fight) at current hearts
     let t = -1;
-    const need = p.hasPrincess ? 0.6 : 0.95;
+    const need = walkNeed(p);
     for (let tier = 0; tier <= 3; tier++) if (fightOK(p, tier, p.hearts.current, need, 0.6)) t = tier;
     return t;
   }
@@ -670,6 +684,7 @@ const BotAI = (() => {
     const occupied = pvpOccupied(p);
     const secret = hasSecret(p);
     const safeT = cloak ? 3 : safeMinibossTier(p);
+    const risk = [0, 1, 2, 3].map(t => t <= safeT && !cloak ? walkRisk(p, t) : 0);
     const tSet = new Set(targets.map(t => t.y * W + t.x));
     const turnLen = Math.max(4, p.getStat('V') + 3.5);
     // simple binary heap
@@ -693,7 +708,7 @@ const BotAI = (() => {
         if (tt === TileType.MINIBOSS && !p.hasUsedTile(x, y) && !cloak) {
           const tier = MapGrid.getTileData(x, y)?.minibossTier ?? 0;
           if (tier > safeT) continue;                              // wall
-          through += turnLen;                                      // movement stops here
+          through += turnLen + risk[tier];                         // movement stops here; we may lose
         }
         if (tt === TileType.STOP && !p.hasUsedTile(x, y)) through += turnLen * 0.5;
       }
@@ -1075,14 +1090,22 @@ const BotAI = (() => {
 
   // goals that travel straight to a target: skip optional detours, wear the cloak
   const RUSH = new Set(['dragon', 'boss', 'princess', 'finish', 'hunt', 'guard']);
+  const POTION_TRIP = new Set([...RUSH, 'master', 'shop', 'guild']);
   const goalKey = g => JSON.stringify([g.kind, g.tier ?? '', (g.items ?? []).join(), g.what?.id ?? g.what?.enchant ?? g.what?.skill ?? g.id ?? '']);
   function chooseGoal(p) {
     const m = M(p);
     m.goalBan ??= {};
-    let last = null;
     const hasCloak = p.hasItem('invis_cloak') || p.hasEquipped('invis_cloak');
     m.cloakNeeded = false;
     m.potionTrip = false;
+    const g = pickGoal(p, m, hasCloak);
+    if (g) { if (m.turns > (m.relaxUntil ?? -1)) m.stuckTurns = 0; return g; }
+    // nothing reachable: relax the walk-through bar (walkNeed) for a while
+    m.stuckTurns = (m.stuckTurns ?? 0) + 1; m.relaxUntil = m.turns + 20;
+    return m.lastCandidate ?? { kind:'earn' };
+  }
+  function pickGoal(p, m, hasCloak) {
+    let last = null;
     for (const g of goalCandidates(p)) {
       if ((m.goalBan[goalKey(g)] ?? -1) > m.turns) continue;
       last = g;
@@ -1090,17 +1113,21 @@ const BotAI = (() => {
       if (!tg.length) continue;
       if (reachableFrom(p, tg, RUSH.has(g.kind) && hasCloak)) return g;
       // no cloak: Invisibility Potions get us past one miniboss each — set out only with
-      // enough of them for every miniboss on the route (else we get stranded half-way)
-      if (RUSH.has(g.kind) && !hasCloak && reachableFrom(p, tg, true)) {
+      // enough of them for every miniboss on the route (else we get stranded half-way).
+      // Shopping trips too: gear sold only behind minibosses we can't beat (e.g. Arcane at the
+      // late Master after the cloak left the game) would otherwise block the dragon forever.
+      if (POTION_TRIP.has(g.kind) && !hasCloak && reachableFrom(p, tg, true)) {
         const need = minibossesOnRoute(p, tg), have = p.inventory.filter(x => x === 'pot_invis').length + (p.invisPotion | 0);
         if (have >= need) { m.potionTrip = true; return g; }
+        if (need > 6) continue;              // more than a shop's stock: not a realistic trip
         const potionShop = { kind:'shop', items:['pot_invis'], potion:true, need };
         if (p.coins >= getItem('pot_invis').buyPrice * (need - have) && reachableFrom(p, goalTargets(p, potionShop))) return potionShop;
       }
       // only reachable past minibosses we can't fight (e.g. coming back from a boss): wear the cloak
       if (hasCloak && !RUSH.has(g.kind) && reachableFrom(p, tg, true)) { m.cloakNeeded = true; return g; }
     }
-    return last ?? { kind:'earn' };
+    m.lastCandidate = last;
+    return null;
   }
 
   // Uncleared minibosses on the route to targets when sneaking past all of them (follows the
@@ -1180,12 +1207,10 @@ const BotAI = (() => {
       case TileType.MINIBOSS: {
         if (used || cloak) return 0;
         const tier = MapGrid.getTileData(x, y)?.minibossTier ?? 0;
-        const w = tierWinP(p, tier, p.hearts.current);
         if (goal.kind === 'farm' && tier === goal.tier) return 0;
-        if (!fightOK(p, tier, p.hearts.current, 0.95, 0.6)) return 1000;
+        if (!fightOK(p, tier, p.hearts.current, walkNeed(p), 0.6)) return 1000;
         // with guaranteed escape a lost fight costs hearts, not the game
-        const risk = canAlwaysEscape(p) ? (1 - tierWinP(p, tier, p.hearts.current - 1)) * 30 : (1 - w) * 400;
-        return risk - (goal.kind === 'farm' ? 10 : 0);
+        return walkRisk(p, tier) - (goal.kind === 'farm' ? 10 : 0);
       }
       case TileType.RANDOM_EVENT: {
         if (used) return 0;
@@ -1199,6 +1224,7 @@ const BotAI = (() => {
       case TileType.REROLL: return Game.getState().rerollUsedThisTurn?.has(`${x},${y}`) ? turnLen : -3;
       case TileType.FIRE:   return -(p.hearts.max - p.hearts.current) * 4;
       case TileType.STOP:   return used ? 0 : turnLen * 0.5;
+      case TileType.BACK:   return MapGrid.getTileData(x, y)?.backAmount ?? 1;   // retraces the steps just walked
       case TileType.WORK: {
         const z = x < 21 ? 1 : x < 31 ? 2 : x < 41 ? 3 : 4;
         return used || RUSH.has(goal.kind) ? 0 : -z * 3.5 * 3 * coinStep;   // used: pays nothing until a Shop/Master visit
@@ -1777,8 +1803,10 @@ const BotAI = (() => {
       return w >= 0.5 ? -30 : 1000;
     }
     if (p.hasPrincess) {                                   // someone stands in the carrier's way
-      const w = pvpWinP(p, q);
-      return w >= 0.5 ? -20 : w >= 0.3 ? 150 : 1000;
+      // the longer they block us (no progress to the finish), the lower the odds we accept:
+      // a hunter parked in a one-tile corridor otherwise stalls the game forever
+      const w = pvpWinP(p, q), need = Math.max(0.1, 0.5 - 0.04 * (M(p).finishStall ?? 0));
+      return w >= need ? -20 : w >= 0.3 ? 150 : 1000;
     }
     return 1000;                                           // don't start pointless fights
   }
@@ -1864,6 +1892,13 @@ const BotAI = (() => {
     const close = rivals(p).some(q => Math.abs(q.position.x - dr.x) + Math.abs(q.position.y - dr.y) <= 3);
     if (!close) return null;
     if ((M(p).lastDragonP ?? 0) >= tune(p).dragonGo) return null;           // we're about to go ourselves
+    // lastDragonP is refreshed by the dragon step, which comes after staging: re-check when geared
+    // (a stale value had ready bots teleport back and forth to the staging shop forever)
+    if (shoppingList(p).length === 0) {
+      const wp = withBossLoadout(p, () => dragonWinP(p, [], 300));
+      m.lastDragonP = wp;
+      if (wp >= tune(p).dragonGo - 0.05) return null;
+    }
     // the shop nearest to the dragon→finish corridor
     const shop = tilesOf(TileType.SHOP).reduce((b, s) => (Math.abs(s.x - 40) + Math.abs(s.y - 10)) < (Math.abs(b.x - 40) + Math.abs(b.y - 10)) ? s : b);
     if (p.position.x === shop.x && p.position.y === shop.y) return null;
@@ -1916,6 +1951,11 @@ const BotAI = (() => {
         // last resort: stuck on an idle goal while damaged → drink from the kit
         if (['refresh','earn'].includes(m.goal?.kind) && m.sameGoalTurns >= 6 && !reserved)
           while (player.hearts.current < player.hearts.max && player.hasItem('pot_heal')) drinkHeal(player);
+        // carrier progress (pvpLandingAdjust takes worse odds against a blocker as this grows)
+        if (m.goal?.kind === 'finish') {
+          if ((m.lastDist ?? INF) < (m.finishBest ?? INF) - 0.5) { m.finishBest = m.lastDist; m.finishStall = 0; }
+          else m.finishStall = (m.finishStall ?? 0) + 1;
+        } else if (!player.hasPrincess) { m.finishBest = INF; m.finishStall = 0; }
         // no-progress detector: same goal, distance not improving for 8 turns → ban it for 15 turns
         if (m.goal) {
           const k = goalKey(m.goal);
@@ -1994,5 +2034,5 @@ const BotAI = (() => {
   function getStrategy(p) { return profile(p).name; }
 
   return { takeTurn, chooseCombatAction, getPhase, configure, getStrategy, pvpTick,
-           _debug: { exactFight, bossLoadout, withBossLoadout, friendDragonP, raceM, beatP, charmDecide, charmOutcome, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
+           _debug: { exactFight, bossLoadout, withBossLoadout, friendDragonP, raceM, beatP, charmDecide, charmOutcome, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, goalTargets, reachableFrom, healGoal, walkNeed, safeMinibossTier, field, landingAdjust, chooseMove, simFight, snapshot, mem } };
 })();
