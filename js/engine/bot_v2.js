@@ -241,8 +241,18 @@ const BotAI = (() => {
     const at = x => x >= 6 ? 1 : x <= -6 ? 0 : _beatT[x + 6];
     return at(lo) * (1 - f) + at(lo + 1) * f;
   }
+  // The (h, g, t) table depends only on (p, q, pB, qB): keep it across calls, so a Charisma
+  // decision that revisits the same odds with other hearts is a lookup.
+  const _raceMemo = new Map(); let _raceTables = 0;
   function raceM(hm, hp, p, q, pB = p, qB = q, T = 0) {
-    const memo = new Map();
+    let a = _raceMemo.get(p); if (!a) _raceMemo.set(p, a = new Map());
+    let b = a.get(q);         if (!b) a.set(q, b = new Map());
+    let c = b.get(pB);        if (!c) b.set(pB, c = new Map());
+    let memo = c.get(qB);
+    if (!memo) {
+      if (++_raceTables > 20000) { _raceMemo.clear(); _raceTables = 0; }
+      memo = new Map(); c.set(qB, memo);
+    }
     const P = (h, g, t) => {                      // player to act
       if (h <= 0) return 1; if (g <= 0) return 0;
       const key = (h * 64 + g) * 8 + t; let v = memo.get(key); if (v !== undefined) return v;
@@ -271,25 +281,65 @@ const BotAI = (() => {
     let q = 0; for (const t of types) q += beatP(ms[t] - 3, defOf(t)); q /= types.length;
     return { p, q };
   }
+  // charmRates without allocations (hot loop of charmOutcomeRaw); same values, same summation order:
+  // the mob attacks with its top stat(s) of F/D/M/C; with the Blowpipe a C attack becomes its best of F/D/M.
+  const _pq = { p:0, q:0 }, ATK4 = ['F','D','M','C'];
+  function charmPQ(ctx, ms, st) {
+    let p = 0;
+    for (const a of ctx.atk) p = Math.max(p, beatP(st[a], ms[DEF[a]] - 3));
+    const top = Math.max(ms.F, ms.D, ms.M, ms.C);
+    const redirect = ctx.immuneC && ms.C === top;
+    const top3 = Math.max(ms.F, ms.D, ms.M);
+    let q = 0, n = 0;
+    for (const t of ATK4) {
+      if (t === 'C' ? (redirect || ms.C !== top) : !(ms[t] === top || (redirect && ms[t] === top3))) continue;
+      q += beatP(ms[t] - 3, t === 'M' && ctx.arcane ? st.A : st[DEF[t]] + (t === 'M' ? ctx.prot : 0)); n++;
+    }
+    _pq.p = p; _pq.q = q / n; return _pq;
+  }
   // Best thing to do with a Charisma success of this tier. hm = mob hearts after any Rattle hit.
+  // Cache key of everything a Charisma decision depends on (besides C and the hearts)
+  function charmKey(ctx) {
+    const s = ctx.st, m = ctx.ms;
+    return `${s.F},${s.D},${s.A},${s.M},${s.C},${s.V}|${m.F},${m.D},${m.A},${m.M},${m.C},${m.V}|${ctx.hp}|${ctx.rattle}|${ctx.endValue}|${ctx.atk.join('')}|${ctx.arcane}|${ctx.prot}|${ctx.immuneC}`;
+  }
+  const _outcomeMemo = new Map();
   function charmOutcome(ctx, tier, hm) {
     if (hm <= 0) return { kind:'won', v:1 };
-    const { p, q } = charmRates(ctx, ctx.ms, ctx.st);
-    let best = { kind:'end', v:ctx.endValue };
-    const consider = (o, ms, st) => { const r = charmRates(ctx, ms, st); const v = raceM(hm, ctx.hp, p, q, r.p, r.q, MOCK_T); if (v > best.v) best = { ...o, v }; };
+    const key = `${charmKey(ctx)}|${tier}|${hm}`;
+    const hit = _outcomeMemo.get(key); if (hit) return hit;
+    if (_outcomeMemo.size > 200000) _outcomeMemo.clear();
+    const r = charmOutcomeRaw(ctx, tier, hm);
+    _outcomeMemo.set(key, r); return r;
+  }
+  function charmOutcomeRaw(ctx, tier, hm) {
     if (tier >= 3 && ctx.rattle) return { kind:'kill', v:1 };
+    const { p, q } = charmPQ(ctx, ctx.ms, ctx.st);
+    let best = { kind:'end', v:ctx.endValue };
+    const ms = ctx.ms, st = ctx.st, w = { ...ms }, sw = { ...st };     // scratch copies, restored after each try
+    const value = () => { const r = charmPQ(ctx, w, sw); return raceM(hm, ctx.hp, p, q, r.p, r.q, MOCK_T); };
     for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++) {          // Swap
-      const a = ALL6[i], b = ALL6[j]; if (ctx.ms[a] === ctx.ms[b]) continue;
-      consider({ kind:'swap', s1:a, s2:b }, { ...ctx.ms, [a]:ctx.ms[b], [b]:ctx.ms[a] }, ctx.st);
+      const a = ALL6[i], b = ALL6[j]; if (ms[a] === ms[b]) continue;
+      w[a] = ms[b]; w[b] = ms[a];
+      const v = value(); if (v > best.v) best = { kind:'swap', s1:a, s2:b, v };
+      w[a] = ms[a]; w[b] = ms[b];
     }
-    if (tier >= 2) for (const s of ALL6) consider({ kind:'malus', stat:s }, { ...ctx.ms, [s]:Math.max(0, ctx.ms[s] - 3.5) }, ctx.st);
-    if (tier >= 3) for (const s of ALL6) consider({ kind:'bonus', stat:s }, ctx.ms, { ...ctx.st, [s]:ctx.st[s] + 3.5 });
+    if (tier >= 2) for (const s of ALL6) {
+      w[s] = Math.max(0, ms[s] - 3.5);
+      const v = value(); if (v > best.v) best = { kind:'malus', stat:s, v };
+      w[s] = ms[s];
+    }
+    if (tier >= 3) for (const s of ALL6) {
+      sw[s] = st[s] + 3.5;
+      const v = value(); if (v > best.v) best = { kind:'bonus', stat:s, v };
+      sw[s] = st[s];
+    }
     return best;
   }
   // Attack or Talk? ctx: { st, C, ms, hm, hp, atk, arcane, prot, immuneC, rattle, endValue }
   const _charmMemo = new Map();
   function charmDecide(ctx) {
-    const key = `${JSON.stringify(ctx.st)}|${ctx.C}|${JSON.stringify(ctx.ms)}|${ctx.hm}|${ctx.hp}|${ctx.rattle}|${ctx.endValue}|${ctx.atk.join('')}|${ctx.arcane}|${ctx.immuneC}`;
+    const key = `${charmKey(ctx)}|${ctx.C}|${ctx.hm}`;
     const hit = _charmMemo.get(key); if (hit) return hit;
     const { p, q } = charmRates(ctx, ctx.ms, ctx.st);
     const wAtt = p * raceM(ctx.hm - 1, ctx.hp, p, q) + (1 - p) * raceM(ctx.hm, ctx.hp, p, q);
@@ -403,6 +453,60 @@ const BotAI = (() => {
     return { winP: w / n, heartsLost: w ? hl / w : snap.hearts, healsUsed: hu / n };
   }
 
+  // Exact odds of a plain fight (no potions, heals, curses, spells or smoke), mirroring simOnce:
+  // every roll is value + d6 vs value + d6, so each half-turn has fixed hit chances and the fight
+  // is a small Markov chain over (mob hearts, our hearts). Kryss, Garrote, Flame and Thorns fold in;
+  // Fury / Hawk Eye (odds change with every hit) and Charisma talk return null → Monte Carlo.
+  // Unlike simOnce there is no 60-round cap (the real combat has none).
+  function exactFight(snap, mobTpl) {
+    if (snap.usePots || snap.charm || snap.fury || snap.hawk) return null;
+    const st = snap.st, ms = mobTpl.stats;
+    const a = bestAttackStat(st, ms, snap.atk);
+    const p = beatP(st[a], ms[DEF[a]] - 3);
+    // mob half: attack type uniform over its top stats (Blowpipe redirects C to its best of F/D/M)
+    let q = 0; const types = mobAttackTypes(ms);
+    for (const t0 of types) {
+      const ts = t0 === 'C' && snap.immuneC ? ['F','D','M'].filter(s => ms[s] === Math.max(ms.F, ms.D, ms.M)) : [t0];
+      for (const t of ts) {
+        const ds = t === 'M' && snap.arcane ? 'A' : DEF[t];
+        q += beatP(ms[t] - 3, st[ds] + (t === 'M' ? snap.prot : 0)) / ts.length;
+      }
+    }
+    q /= types.length;
+    const qUs = snap.thorns ? q * 0.7 : q, qMob = snap.thorns ? q * 0.3 : 0;
+    const hit = snap.flame ? 2 : 1;                    // Flame: the burn ticks before the mob's next attack
+    let hm = mobTpl.hearts.max ?? mobTpl.hearts.current;
+    if (snap.kryss) hm--;
+    const g0 = snap.hearts;
+    if (hm <= 0) return { winP: 1, heartsLost: 0 };
+    // W = P(win), G = E[our final hearts · 1{win}], from our turn (P*) and from the mob's (M*)
+    const memo = new Map();
+    const atP = (h, g) => {
+      if (h <= 0) return [1, g]; if (g <= 0) return [0, 0];
+      if (snap.garrote && h <= 2) return [1, g];
+      const k = h * 64 + g; const c = memo.get(k); if (c) return c;
+      // P = p·M(h−hit) + (1−p)·[qUs·P(g−1) + qMob·P(h−1) + (1−qUs−qMob)·P]  → solve the self-loop
+      const den = 1 - (1 - p) * (1 - qUs - qMob);
+      let W = 0, G = 0;
+      if (den > 1e-12) {
+        const [w1, g1] = atM(h - hit, g), [w2, g2] = atP(h, g - 1), [w3, g3] = atP(h - 1, g);
+        W = (p * w1 + (1 - p) * (qUs * w2 + qMob * w3)) / den;
+        G = (p * g1 + (1 - p) * (qUs * g2 + qMob * g3)) / den;
+      }
+      const r = [W, G]; memo.set(k, r); return r;
+    };
+    const atM = (h, g) => {
+      if (h <= 0) return [1, g]; if (g <= 0) return [0, 0];
+      const [w0, g0_] = atP(h, g), [w2, g2] = atP(h, g - 1), [w3, g3] = atP(h - 1, g);
+      const s0 = 1 - qUs - qMob;
+      return [qUs * w2 + qMob * w3 + s0 * w0, qUs * g2 + qMob * g3 + s0 * g0_];
+    };
+    const first = Math.max(0, Math.min(6, 6 - (ms.V - st.V))) / 6;   // P(V + d6 > mob V)
+    const [wp, gp] = atP(hm, g0), [wm, gm] = atM(hm, g0);
+    const W = first * wp + (1 - first) * wm, G = first * gp + (1 - first) * gm;
+    return { winP: W, heartsLost: W > 0 ? g0 - G / W : g0 };
+  }
+
   // Win probability (and expected hearts lost) vs a whole miniboss tier (one of its 6 named
   // mobs at random), without stat potions. Cached per stat-signature.
   // useMap: a Map picks the d6 roll, so the tier means its best mob for us (`pick` = roll − 1).
@@ -416,7 +520,7 @@ const BotAI = (() => {
     const key = `${p.id}|${tier}|${useMap}|${snap.atk.join('')}|${JSON.stringify(snap.st)}|${snap.hearts}|${snap.kryss}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.thorns}|${snap.fury}|${snap.arcane}|${snap.charm}|${snap.rattle}`;
     if (_tierCache[key]) return _tierCache[key];
     const pool = MOBS.getByTier(tier).filter(m => !m.isBoss).slice(0, 6);
-    const rs = pool.map(m => simFight(snap, m, 120));
+    const rs = pool.map(m => exactFight(snap, m) ?? simFight(snap, m, 120));
     if (useMap) {
       let pick = 0;
       rs.forEach((r, i) => { if (r.winP - 0.05 * r.heartsLost > rs[pick].winP - 0.05 * rs[pick].heartsLost) pick = i; });
@@ -1849,5 +1953,5 @@ const BotAI = (() => {
   function getStrategy(p) { return profile(p).name; }
 
   return { takeTurn, chooseCombatAction, getPhase, configure, getStrategy, pvpTick,
-           _debug: { bossLoadout, withBossLoadout, friendDragonP, raceM, beatP, charmDecide, charmOutcome, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
+           _debug: { exactFight, bossLoadout, withBossLoadout, friendDragonP, raceM, beatP, charmDecide, charmOutcome, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, simFight, snapshot, mem } };
 })();
