@@ -1142,13 +1142,15 @@ const Game = (() => {
     const player = current();
     const ench   = ENCHANTMENTS.find(e => e.id === enchantId);
     if (!ench) return;
-    const cost = ench.cost ?? tier * 50;
+    if (ench.cost == null) tier = Math.min(3, Math.max(1, Math.floor(tier) || 1));   // Fury / Hawk Eye: level 1–3
+    else tier = 1;
+    const cost = ench.cost ?? tier * 33;
     if (player.coins < cost) { emit('error', { message: 'Not enough coins' }); return; }
     if (!player.applyEnchantment(slot, ench, tier)) {
       emit('error', { message: 'Cannot enchant that slot' }); return;
     }
     player.coins -= cost;
-    log(`${player.name} enchants ${slot} with ${ench.name} (tier ${tier})`);
+    log(`${player.name} enchants ${slot} with ${ench.name}${ench.cost == null ? ` Lv ${tier}` : ''} (${cost}💰)`);
     emit('enchanted', { player: player.name, slot, enchantment: ench, tier });
   }
 

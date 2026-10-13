@@ -55,14 +55,17 @@ class Player {
 
     let value = this.baseStats[resolvedStat] ?? 0;
 
+    const counted = new Set();   // enchantments marked `once` (Sharpness, Precision) count one copy only
     for (const slot of ALL_SLOTS) {
       const item = this.equipped[slot];
       if (!item) continue;
       value += item.statBonus?.[resolvedStat] ?? 0;
       // Enchantments that grant flat stat bonuses
-      if (item.enchantment?.effect?.type === 'stat_bonus' &&
-          item.enchantment.effect.stat === resolvedStat) {
-        value += item.enchantment.effect.value;
+      const ench = item.enchantment;
+      if (ench?.effect?.type === 'stat_bonus' && ench.effect.stat === resolvedStat &&
+          !(ench.once && counted.has(ench.id))) {
+        value += ench.effect.value;
+        counted.add(ench.id);
       }
       // Lightness enchantment removes speed malus from heavy armor
       if (resolvedStat === 'V' && item.enchantment?.effect?.type === 'remove_speed_malus') {

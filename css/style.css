@@ -988,6 +988,17 @@ body {
 #master-enchant button:hover:not(:disabled) { background: #3a4a60; border-color: #ffd700; }
 #master-skills button:disabled,
 #master-enchant button:disabled { opacity: 0.4; cursor: default; }
+#master-enchant .ench-level {
+  display: block;
+  margin: 4px 0 2px;
+  padding: 3px 6px;
+  background: #12122a;
+  color: #ffd700;
+  border: 1px solid #555;
+  border-radius: 3px;
+  cursor: pointer;
+}
+#master-enchant .ench-level:focus { outline: 1px solid #ffd700; }
 
 /* Inventory equip/unequip buttons */
 .inv-item {

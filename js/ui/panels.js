@@ -75,12 +75,12 @@ const Panels = (() => {
     const e = ench.effect;
     if (!e) return '';
     switch (e.type) {
-      case 'stat_bonus':                return `+${e.value} ${e.stat} (permanent)`;
-      case 'armor_reduction_on_hit':    return `reduces enemy ARM by tier on each hit`;
+      case 'stat_bonus':                return `+${e.value} ${e.stat} (permanent${ench.once ? ', only one copy counts' : ', stacks'})`;
+      case 'armor_reduction_on_hit':    return `reduces enemy ARM by its level on each hit`;
       case 'heal_on_kill':              return `+1 ❤ on kill`;
-      case 'coins_on_kill':             return `+${e.value ?? 5} 💰 on kill`;
+      case 'coins_on_kill':             return `+${e.pct ?? 50}% of the loot's worth (coins + item sell value) on kill`;
       case 'fire_on_hit':               return `sets enemy on fire for 1 turn`;
-      case 'speed_reduction_on_hit':    return `reduces enemy SPD by tier on each hit`;
+      case 'speed_reduction_on_hit':    return `reduces enemy SPD by its level on each hit`;
       case 'magic_defense_via_armor':   return `magic defense uses ARM instead of MAG`;
       case 'reflect_30pct':             return `30% chance to reflect incoming damage`;
       case 'remove_speed_malus':        return `removes armor speed penalty`;
@@ -1209,21 +1209,38 @@ const Panels = (() => {
       const slots = ['strength','dexterity','magic','charisma','speed','armor','shield']
         .filter(s => player.equipped[s] && !player.equipped[s].enchantment);
       if (!slots.length) return;
-      const cost    = ench.cost ?? 50;
+      // Fury / Hawk Eye have no fixed cost: the buyer picks a level 1–3 (33💰 per level)
+      const leveled = ench.cost == null;
+      const owned   = !!ench.once && player.hasEnchantment(ench.id);   // a second copy would do nothing
+      let tier = 1;
+      const costOf  = () => ench.cost ?? tier * 33;
       const effDesc = enchantEffectDesc(ench);
       const div     = document.createElement('div');
-      div.innerHTML =
-        `<strong>${ench.name}</strong> — ${cost}💰` +
-        (effDesc ? ` <em style="color:#aaa;font-size:0.85em">(${effDesc})</em>` : '');
-      slots.forEach(slot => {
+      div.innerHTML = `<strong>${ench.name}</strong> — <span class="ench-cost">${costOf()}</span>💰` +
+        (effDesc ? ` <em style="color:#aaa;font-size:0.85em">(${effDesc})</em>` : '') +
+        (owned ? ` <em style="color:#ffd700;font-size:0.85em">— already active</em>` : '');
+      const btns = slots.map(slot => {
         const btn = document.createElement('button');
-        btn.disabled = player.coins < cost;
         btn.textContent = `→ ${slot}`;
         btn.addEventListener('click', () =>
-          Game.submitAction({ type: 'enchant', slot, enchantId: ench.id, tier: 1 })
+          Game.submitAction({ type: 'enchant', slot, enchantId: ench.id, tier })
         );
-        div.appendChild(btn);
+        return btn;
       });
+      const refresh = () => {
+        div.querySelector('.ench-cost').textContent = costOf();
+        btns.forEach(b => { b.disabled = player.coins < costOf() || owned; });
+      };
+      if (leveled) {
+        const sel = document.createElement('select');
+        sel.className = 'ench-level';
+        sel.title = 'Level: the enemy loses this much per hit';
+        [1, 2, 3].forEach(lv => sel.add(new Option(`Lv ${lv} (−${lv}/hit, ${lv * 33}💰)`, lv)));
+        sel.addEventListener('change', () => { tier = +sel.value; refresh(); });
+        div.appendChild(sel);
+      }
+      btns.forEach(b => div.appendChild(b));
+      refresh();
       enchEl.appendChild(div);
     });
 

@@ -110,7 +110,6 @@ const Combat = (() => {
     if (mob.coinDice) for (let i = 0; i < mob.coinDice; i++) coins += Dice.d6();
     if (player.hasEquipped('big_knife'))    coins += 15;
     if (player.hasEquipped('small_pistol')) coins *= 2;
-    if (player.hasEnchantment('plunder'))   coins += 5;
 
     const STAT_KEYS = ['F','D','A','M','C','V'];
     const qtyMult = player.hasEquipped('bottomless_bag') ? 2 : 1;
@@ -125,6 +124,15 @@ const Combat = (() => {
         const qty = (entry.count ?? 1) * qtyMult;
         for (let i = 0; i < qty; i++) items.push(entry.itemId);
       }
+    }
+    // Plunder: +50% of the loot's worth (its coins plus what its items sell for)
+    if (player.hasEnchantment('plunder')) {
+      const crowbar = player.hasEquipped('crowbar');
+      const worth = items.reduce((s, id) => {
+        const it = getItem(id);
+        return s + (!it ? 0 : crowbar ? Math.floor((it.buyPrice ?? 0) * 0.75) : sellPrice(it));
+      }, coins);
+      coins += Math.floor(worth / 2);
     }
     return { items, coins };
   }

@@ -182,13 +182,13 @@ const BOSS_DROPS = [
 ];
 
 const ENCHANTMENTS = [
-  { id:'sharpness',  name:'Sharpness',  category:'F',   cost:60,  effect:{type:'stat_bonus',            stat:'F', value:3} },
-  { id:'fury',       name:'Fury',       category:'F',   cost:null, effect:{type:'armor_reduction_on_hit'} }, // cost = tier*50
+  { id:'sharpness',  name:'Sharpness',  category:'F',   cost:60,  effect:{type:'stat_bonus',            stat:'F', value:3}, once:true }, // only one copy counts
+  { id:'fury',       name:'Fury',       category:'F',   cost:null, effect:{type:'armor_reduction_on_hit'} }, // level 1–3, cost = level*33
   { id:'bloodlust',  name:'Bloodlust',  category:'F/D', cost:100, effect:{type:'heal_on_kill'} },
-  { id:'plunder',    name:'Plunder',    category:'F/D', cost:100, effect:{type:'coins_on_kill', value:5} },
+  { id:'plunder',    name:'Plunder',    category:'F/D', cost:100, effect:{type:'coins_on_kill', pct:50} }, // +50% of the loot's worth (coins + item sell value)
   { id:'flame',      name:'Flame',      category:'F/D', cost:100, effect:{type:'fire_on_hit'} },
-  { id:'precision',  name:'Precision',  category:'D',   cost:60,  effect:{type:'stat_bonus',            stat:'D', value:3} },
-  { id:'hawk_eye',   name:'Hawk Eye',   category:'D',   cost:null, effect:{type:'speed_reduction_on_hit'} }, // cost = tier*50
+  { id:'precision',  name:'Precision',  category:'D',   cost:60,  effect:{type:'stat_bonus',            stat:'D', value:3}, once:true }, // only one copy counts
+  { id:'hawk_eye',   name:'Hawk Eye',   category:'D',   cost:null, effect:{type:'speed_reduction_on_hit'} }, // level 1–3, cost = level*33
   { id:'arcane',     name:'Arcane',     category:'A',   cost:50,  effect:{type:'magic_defense_via_armor'} },
   { id:'thorns',     name:'Thorns',     category:'A',   cost:100, effect:{type:'reflect_30pct'} },
   { id:'lightness',  name:'Lightness',  category:'A',   cost:30,  effect:{type:'remove_speed_malus'} },

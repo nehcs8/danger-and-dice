@@ -205,7 +205,7 @@ Combat alternates between `player_attack` and `mob_attack` subphases, tracked in
    - Smoke (`isSmokeActive`): player is immune this half-turn; cleared at end of tick.
    - Status effects (fire, ice, lightning) tick at end of the mob attack half-turn.
 6. **Bail**: player escapes if has Rope (consumed) or Invisibility spell (consumed) or Stealth Shoes (reusable). If both Rope and Invisibility available, a picker appears. Blocked if `chainedTurns > 0`.
-7. **Loot on victory**: `resolveLoot()`. Bottomless Bag doubles quantities. Coins modified by Big Knife (+15), Small Pistol (×2), Plunder (+5). Stat-potion drops use `rollForStat` — a d6 determines which stat the potion buffs.
+7. **Loot on victory**: `resolveLoot()`. Bottomless Bag doubles quantities. Coins modified by Big Knife (+15), Small Pistol (×2), then Plunder (+50% of the loot's worth: those coins plus the items' sell value, Crowbar-aware). Stat-potion drops use `rollForStat` — a d6 determines which stat the potion buffs.
 
 ### Mob roll formula
 Both mob attack and defense use: `stat − 3 + d6` (base can be negative for low-stat mobs).
@@ -253,7 +253,8 @@ Items like **Dragon Blood 2F2M2V**, **Vampire Blood 2D2V**, **Werewolf Blood 2F2
 Combat-only spells (Invisibility, Transmutation, Smoke) appear faded without a Use button in the HUD inventory outside combat.
 
 ### Enchantments (applied at Master)
-Sharpness (+3F), Fury (−tier×A on hit), Bloodlust (+1 heart on kill), Plunder (+5 coins on kill), Flame (fire status on hit), Precision (+3D), Hawk Eye (−tier×V on hit), Arcane (magic defense uses A), Thorns (30% reflect on being hit), Lightness (removes speed malus), Resistance (+3A).
+Sharpness (+3F), Fury (−level×A on hit), Bloodlust (+1 heart on kill), Plunder (+50% of loot worth on kill), Flame (fire status on hit), Precision (+3D), Hawk Eye (−level×V on hit), Arcane (magic defense uses A), Thorns (30% reflect on being hit), Lightness (removes speed malus), Resistance (+3A).
+Fury and Hawk Eye are bought at level 1–3 (33 coins per level; picked in the Master modal, stored as `enchantment.tier`). Resistance (+3A) stacks across items; Sharpness and Precision count once (`once: true` in ENCHANTMENTS, applied in `getStat`), like every effect enchant.
 
 ### PVP (post-Dragon)
 After Dragon dies, Princess appears at Dragon's tile. PVP is active.

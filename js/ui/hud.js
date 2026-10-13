@@ -155,7 +155,8 @@ const HUD = (() => {
     return `<div class="equipped-grid">${
       slots.map(slot => {
         const item = player.equipped[slot];
-        const ench = item?.enchantment ? ` <em>${item.enchantment.id}</em>` : '';
+        const e    = item?.enchantment;
+        const ench = e ? ` <em>${e.id}${e.cost == null ? ` ${e.tier ?? 1}` : ''}</em>` : '';
         const unequipBtn = (!readOnly && item)
           ? `<button class="inv-equip-btn" onclick="HUD.tryUnequip('${slot}')">▼</button>`
           : '';
@@ -224,7 +225,8 @@ const HUD = (() => {
       const equippedDiv = document.createElement('div');
       equippedDiv.className = 'inv-slot-equipped';
       if (equippedItem) {
-        const enchName = equippedItem.enchantment?.name ?? equippedItem.enchantment?.id ?? null;
+        const ench     = equippedItem.enchantment;
+        const enchName = ench ? (ench.name ?? ench.id) + (ench.cost == null ? ` Lv ${ench.tier ?? 1}` : '') : null;
         const enchSpan = enchName
           ? ` <span class="enchanted-item">✦ ${enchName}</span>` : '';
         equippedDiv.innerHTML =
