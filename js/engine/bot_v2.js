@@ -29,22 +29,23 @@ const BotAI = (() => {
     // +3 enchants beat Bloodlust once the build is geared (Bloodlust does nothing vs the dragon)
     F: { name:'F', main:'F', weapon:'halberd',  wslot:'strength',  weaponEnchant:'sharpness' },
     D: { name:'D', main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'precision' },
-    FB: { name:'FB', main:'F', weapon:'halberd',  wslot:'strength',  weaponEnchant:'bloodlust' },
-    DB: { name:'DB', main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'bloodlust' },
+    // Bloodlust heals a heart per kill: these farm higher tiers sooner and heal later
+    FB: { name:'FB', main:'F', weapon:'halberd',  wslot:'strength',  weaponEnchant:'bloodlust', tune:{ farmWin:0.93, farmHearts:2.0, healMissing:3 } },
+    DB: { name:'DB', main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'bloodlust', tune:{ farmWin:0.93, farmHearts:2.0, healMissing:3 } },
     // Map farmers: an A-tank (Heavy Armor + Large Shield, Resistance on both ≈ A18) carrying Maps
     // picks the miniboss that only attacks with F on every tier (Guard, Orc, Werewolf, Giant)
     // and shoots it through its weak V. Giants (t3) pay ~155 coins + Halberd + Pegasus each.
     DG:  { name:'DG',  main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'precision', mapFarm:true, tune:{ pegasus:false } },
-    DBG: { name:'DBG', main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'bloodlust', mapFarm:true, tune:{ pegasus:false } },
-    M: { name:'M', main:'M', weapon:'grimoire', wslot:'magic', needsSpell:true },
+    DBG: { name:'DBG', main:'D', weapon:'arquebus', wslot:'dexterity', weaponEnchant:'bloodlust', mapFarm:true, tune:{ pegasus:false, farmWin:0.93, farmHearts:2.0, healMissing:3 } },
+    M: { name:'M', main:'M', weapon:'grimoire', wslot:'magic', needsSpell:true, weaponEnchant:'sim' },
     // Garrote: executes any mob at ≤2 hearts with an F attack. Farms z0 for free from turn one;
     // levels to F+6 through miniboss wins. G = Sharpness (+3F) on it, GB = Bloodlust (human route).
     G:  { name:'G',  main:'F', weapon:'garrote', wslot:'strength', guildWeapon:true, weaponEnchant:'sharpness', speedEarly:true, fallback:'F' },
-    GB: { name:'GB', main:'F', weapon:'garrote', wslot:'strength', guildWeapon:true, weaponEnchant:'bloodlust', speedEarly:true, fallback:'F' },
+    GB: { name:'GB', main:'F', weapon:'garrote', wslot:'strength', guildWeapon:true, weaponEnchant:'bloodlust', speedEarly:true, fallback:'F', tune:{ farmWin:0.93, farmHearts:2.0, healMissing:3 } },
     // Blowpipe: immune to Charisma attacks (they're redirected to the mob's best of F/D/M). Levels to D+6.
     BP: { name:'BP', main:'D', weapon:'blowpipe', wslot:'dexterity', guildWeapon:true, weaponEnchant:'precision', speedEarly:true, fallback:'D' },
     // Dark Tome: spells' magic value doubled. Levels to M+6. Spells become the dragon kit.
-    DT: { name:'DT', main:'M', weapon:'dark_tome', wslot:'magic', needsSpell:true, guildWeapon:true, weaponEnchant:'bloodlust', fallback:'M' },
+    DT: { name:'DT', main:'M', weapon:'dark_tome', wslot:'magic', needsSpell:true, guildWeapon:true, weaponEnchant:'sim', fallback:'M' },
     // Stealth Shoes: escape always works → farm above your level, bail at 1 heart. Pegasus for bosses.
     SS: { name:'SS', main:'auto', guildExtra:'stealth_shoes', extraFirst:true, escapeFarming:true,
           slots:['W','armor','shield','speed','charisma'] },
@@ -52,8 +53,10 @@ const BotAI = (() => {
     // Charmers: weapon + high Charisma; in fights they Talk when it beats Attacking (Swap the
     // mob's strong stats onto weak ones, debuff it, buff themselves, or end the encounter
     // profitably). CR carries the Cursed Rattle: every successful Talk also deals damage.
-    CH: { name:'CH', main:'auto', charm:true, tune:{ skillOrder:'C,main,A' } },
-    CR: { name:'CR', main:'auto', charm:true, guildExtra:'cursed_rattle', tune:{ skillOrder:'C,main,A' } },
+    // Bosses: CH only trades (Charisma success → take the one drop it wants, leave, come back for
+    // the next); CR can also kill them (the Rattle hits on every success).
+    CH: { name:'CH', main:'auto', charm:true, tune:{ skillOrder:'C,main,A', bossTrade:'only' } },
+    CR: { name:'CR', main:'auto', charm:true, guildExtra:'cursed_rattle', tune:{ skillOrder:'C,main,A', bossTrade:'also' } },
     // Beastmaster: befriend a "?" animal with Charisma, let it land the killing blows until it
     // evolves to Savage, then send it at the dragon and keep it alive with heal potions.
     BM: { name:'BM', main:'auto', beast:true },
@@ -77,11 +80,60 @@ const BotAI = (() => {
     bosses: true,               // hunt normal bosses whose drops raise our dragon odds (King excluded: no battle model yet)
     bossGo: 0.9,                // fight a boss at this simulated win probability
     bossGain: 0.08,             // …if its drops raise our dragon win probability by at least this much
+    tradeGain: 0.04,            // …a trade (one drop, no fight to the death) is worth the trip at this gain
+    bossTrade: false,           // charmers: 'only' = trade one drop per visit with Charisma instead of killing bosses, 'also' = both
     beastFriends: 2,            // Beastmaster: animal friends to keep (one to train, one as dragon backup)
     befriendMinP: 0.17,         // Beastmaster: try Charisma on an animal when P(margin ≥ 7) is at least this
     beastGo: 0.95,              // Beastmaster: send the friends at the dragon at this win probability (heals are cheap)
+    extraEnch: 'main',          // enchant the other equipped items too (+3 stat enchants stack across slots):
+                                //   'main' = +3 main stat (Resistance for mages) · 'A' = Resistance · 'sim' = best simulated vs the dragon · false = off
+    weaponEnch: null,           // override the profile's weapon enchantment (an id, or 'sim')
+    planner: false,             // choose the enchant kit in-game among KIT_CANDIDATES (see plannedKit); overrides kit
+    planFarm: 0.15,             // planner: score penalty per heart lost per fight at the tier we farm (farm safety)
+    kit: null,                  // fixed enchant kit, e.g. 'fury1+lightness+sharpness+2×resistance': every enchanted
+                                //   slot takes the next missing entry (overrides weaponEnch/shieldEnch/extraEnch/armor rules)
+    shieldEnch: null,           // override the shield enchantment (default Resistance), e.g. 'thorns'
+    guildLadder: true,          // guild weapon below Lv.6: farm z0 at Lv.1, z1 at Lv.2, z2 from Lv.3 (fewest kills per level)
+    guildFarmWin: 0.9,          // …accepting this win probability on the ladder tier
     mapFarm: false,             // carry Maps and pick each miniboss tile's best mob for us (see DG)
     mapStock: 4,                // Maps to keep in the bag while map farming
+  };
+  // Per-strategy kit overrides for tournaments (strategy_tournament.js only takes names); filled in a
+  // generated copy of this file by bot_dev/make_kit_bot.js. A genome's own tune.kit wins.
+  const KIT_OVERRIDES = {};
+  // Default enchant kit per strategy: the best of the screened kits in solo races (100 seeds) and a
+  // 715-game tournament, 2026-10-13 (bot_dev/ENCHANT_PLAN.md 5f–5g). DBG keeps its own rules (its
+  // best kit only tied in solo and lost in the tournament); Charisma builds were not screened.
+  const PROFILE_KITS = {
+    F: 'fury1+lightness+2×resistance+sharpness',
+    D: 'flame+hawk_eye3+precision+2×resistance',
+    FB: 'flame+fury2+2×resistance+sharpness',
+    DB: 'arcane+hawk_eye1+lightness+precision+resistance',
+    DG: 'flame+hawk_eye2+precision+2×resistance',
+    M: 'arcane+flame+2×resistance+thorns',
+    G: 'arcane+fury2+2×resistance+sharpness',
+    GB: 'arcane+fury1+2×resistance+sharpness',
+    BP: 'arcane+hawk_eye1+precision+2×resistance',
+    DT: 'flame+fury3+2×resistance+sharpness',
+    SS: 'arcane+flame+lightness+resistance+thorns',
+    BB: 'flame+hawk_eye3+precision+2×resistance',
+  };
+  // Candidate kits for the enchant planner: the screening's top kits per strategy, the solo-race
+  // winner and the best Thorns variants (results/enchant/ranking.json, 2026-10-13).
+  const KIT_CANDIDATES = {
+    F: ["fury1+lightness+2×resistance+sharpness", "arcane+fury1+lightness+2×resistance", "arcane+fury1+lightness+resistance+sharpness", "flame+fury2+3×resistance", "arcane+fury1+3×resistance", "flame+fury3+3×resistance", "arcane+flame+fury2+2×resistance", "arcane+fury2+3×resistance", "arcane+fury3+3×resistance", "arcane+flame+fury3+2×resistance", "fury2+3×resistance+thorns", "fury3+3×resistance+thorns", "flame+fury1+2×resistance+thorns"],
+    D: ["flame+hawk_eye3+precision+2×resistance", "hawk_eye1+lightness+precision+2×resistance", "flame+hawk_eye2+precision+2×resistance", "arcane+hawk_eye1+lightness+precision+resistance", "arcane+hawk_eye1+lightness+2×resistance", "arcane+hawk_eye2+3×resistance", "flame+hawk_eye3+precision+resistance+thorns", "flame+hawk_eye2+precision+resistance+thorns", "arcane+hawk_eye2+precision+2×resistance", "arcane+hawk_eye1+precision+2×resistance", "hawk_eye3+precision+2×resistance+thorns"],
+    FB: ["flame+fury2+2×resistance+sharpness", "fury1+lightness+2×resistance+sharpness", "arcane+fury1+lightness+resistance+sharpness", "arcane+fury1+lightness+2×resistance", "flame+fury3+2×resistance+sharpness", "flame+fury1+2×resistance+sharpness", "arcane+fury1+2×resistance+sharpness", "fury1+lightness+3×resistance", "arcane+flame+lightness+resistance+thorns", "fury3+2×resistance+sharpness+thorns", "flame+fury3+resistance+sharpness+thorns"],
+    DB: ["arcane+hawk_eye1+lightness+precision+resistance", "hawk_eye1+lightness+precision+2×resistance", "arcane+hawk_eye1+lightness+2×resistance", "flame+hawk_eye2+precision+2×resistance", "flame+hawk_eye3+precision+2×resistance", "hawk_eye1+lightness+3×resistance", "arcane+flame+2×resistance+thorns", "arcane+flame+3×resistance", "arcane+flame+lightness+resistance+thorns", "flame+hawk_eye1+precision+2×resistance", "hawk_eye2+precision+2×resistance+thorns"],
+    DG: ["flame+hawk_eye2+precision+2×resistance", "hawk_eye1+lightness+precision+2×resistance", "flame+hawk_eye3+precision+2×resistance", "hawk_eye1+precision+3×resistance", "arcane+hawk_eye1+precision+2×resistance", "arcane+hawk_eye1+lightness+precision+resistance", "flame+hawk_eye2+precision+resistance+thorns", "arcane+hawk_eye1+lightness+2×resistance", "hawk_eye2+precision+3×resistance", "arcane+hawk_eye2+precision+2×resistance", "hawk_eye3+precision+2×resistance+thorns", "flame+hawk_eye3+precision+resistance+thorns"],
+    DBG: ["hawk_eye1+lightness+precision+2×resistance", "flame+hawk_eye3+precision+2×resistance", "flame+hawk_eye2+precision+2×resistance", "arcane+hawk_eye1+lightness+2×resistance", "arcane+hawk_eye1+3×resistance", "flame+hawk_eye1+precision+2×resistance", "arcane+hawk_eye1+precision+2×resistance", "hawk_eye1+precision+3×resistance", "arcane+hawk_eye1+lightness+precision+resistance", "arcane+hawk_eye2+3×resistance", "flame+hawk_eye2+precision+resistance+thorns", "flame+hawk_eye3+precision+resistance+thorns", "hawk_eye2+precision+2×resistance+thorns"],
+    M: ["arcane+flame+2×resistance+thorns", "arcane+flame+lightness+resistance+thorns", "flame+3×resistance+thorns", "flame+4×resistance", "arcane+flame+3×resistance", "flame+lightness+3×resistance", "flame+lightness+2×resistance+thorns", "arcane+3×resistance+thorns", "fury3+4×resistance", "arcane+fury3+3×resistance"],
+    G: ["arcane+fury2+2×resistance+sharpness", "flame+fury2+2×resistance+sharpness", "flame+fury3+2×resistance+sharpness", "arcane+fury1+2×resistance+sharpness", "fury1+lightness+2×resistance+sharpness", "flame+fury2+resistance+sharpness+thorns", "flame+fury3+resistance+sharpness+thorns", "fury3+2×resistance+sharpness+thorns", "fury2+2×resistance+sharpness+thorns", "arcane+fury1+lightness+resistance+sharpness"],
+    GB: ["arcane+fury1+2×resistance+sharpness", "flame+fury2+2×resistance+sharpness", "fury3+3×resistance+sharpness", "arcane+fury2+2×resistance+sharpness", "fury2+3×resistance+sharpness", "fury3+2×resistance+sharpness+thorns", "flame+fury3+resistance+sharpness+thorns", "flame+fury3+2×resistance+sharpness", "arcane+fury3+2×resistance+sharpness", "fury2+2×resistance+sharpness+thorns"],
+    BP: ["arcane+hawk_eye1+precision+2×resistance", "arcane+hawk_eye2+precision+2×resistance", "flame+hawk_eye3+precision+2×resistance", "arcane+hawk_eye3+precision+2×resistance", "flame+hawk_eye2+precision+2×resistance", "hawk_eye2+precision+3×resistance", "hawk_eye3+precision+3×resistance", "hawk_eye3+precision+2×resistance+thorns", "hawk_eye1+lightness+precision+2×resistance", "hawk_eye1+precision+3×resistance", "hawk_eye2+precision+2×resistance+thorns", "flame+hawk_eye3+precision+resistance+thorns"],
+    DT: ["flame+fury3+2×resistance+sharpness", "arcane+flame+lightness+resistance+thorns", "flame+fury3+2×resistance+thorns", "fury3+2×resistance+sharpness+thorns", "hawk_eye3+precision+3×resistance", "fury2+hawk_eye1+lightness+2×resistance", "flame+fury3+3×resistance", "arcane+fury2+lightness+2×resistance", "flame+hawk_eye3+precision+resistance+thorns", "flame+fury3+lightness+sharpness+thorns"],
+    SS: ["arcane+flame+lightness+resistance+thorns", "arcane+flame+2×resistance+thorns", "hawk_eye1+lightness+precision+2×resistance", "arcane+flame+3×resistance", "fury1+lightness+2×resistance+sharpness", "flame+hawk_eye2+precision+2×resistance", "arcane+hawk_eye1+lightness+precision+resistance", "flame+fury1+3×resistance", "arcane+fury1+lightness+resistance+sharpness", "flame+fury2+3×resistance", "flame+3×resistance+thorns"],
+    BB: ["flame+hawk_eye3+precision+2×resistance", "flame+hawk_eye2+precision+2×resistance", "flame+hawk_eye1+precision+2×resistance", "hawk_eye1+lightness+precision+2×resistance", "arcane+hawk_eye1+precision+2×resistance", "arcane+flame+lightness+resistance+thorns", "fury1+lightness+2×resistance+sharpness", "hawk_eye2+precision+3×resistance", "arcane+fury1+lightness+resistance+sharpness", "arcane+fury1+lightness+2×resistance", "hawk_eye3+precision+2×resistance+thorns", "hawk_eye2+precision+2×resistance+thorns"],
   };
   function tune(p) { const m = M(p); if (!m.profile) profile(p); return m.tune ?? DEFAULT_TUNE; }
 
@@ -344,10 +396,25 @@ const BotAI = (() => {
     return best;
   }
   // Attack or Talk? ctx: { st, C, ms, hm, hp, atk, arcane, prot, immuneC, rattle, endValue }
-  const _charmMemo = new Map();
+  // Memo: the fixed part of ctx (cached on it as _cfg) → stats packed into two numbers (6 bits each,
+  // exact while every value is an integer in 0..63) → result; anything else falls back to the string key.
+  const _charmMemo = new Map(); let _charmN = 0;
+  const _b6 = x => x >= 0 && x < 64 && Math.floor(x) === x;
   function charmDecide(ctx) {
-    const key = `${charmKey(ctx)}|${ctx.C}|${ctx.hm}`;
-    const hit = _charmMemo.get(key); if (hit) return hit;
+    const s = ctx.st, m = ctx.ms;
+    let inner = null, k2 = 0, key = null;
+    if (_b6(s.F) && _b6(s.D) && _b6(s.A) && _b6(s.M) && _b6(s.C) && _b6(s.V) && _b6(ctx.C)
+        && _b6(m.F) && _b6(m.D) && _b6(m.A) && _b6(m.M) && _b6(m.C) && _b6(m.V) && _b6(ctx.hm) && _b6(ctx.hp)) {
+      const cfg = ctx._cfg ??= `${ctx.rattle}|${ctx.endValue}|${ctx.atk.join('')}|${ctx.arcane}|${ctx.prot}|${ctx.immuneC}`;
+      const k1 = ((((((s.F * 64 + s.D) * 64 + s.A) * 64 + s.M) * 64 + s.C) * 64 + s.V) * 64) + ctx.C;
+      k2 = (((((((m.F * 64 + m.D) * 64 + m.A) * 64 + m.M) * 64 + m.C) * 64 + m.V) * 64 + ctx.hm) * 64) + ctx.hp;
+      let a = _charmMemo.get(cfg); if (!a) _charmMemo.set(cfg, a = new Map());
+      inner = a.get(k1);           if (!inner) a.set(k1, inner = new Map());
+      const hit = inner.get(k2); if (hit) return hit;
+    } else {
+      key = `${charmKey(ctx)}|${ctx.C}|${ctx.hm}`;
+      const hit = _charmMemo.get(key); if (hit) return hit;
+    }
     const { p, q } = charmRates(ctx, ctx.ms, ctx.st);
     const wAtt = p * raceM(ctx.hm - 1, ctx.hp, p, q) + (1 - p) * raceM(ctx.hm, ctx.hp, p, q);
     const P1 = marginP(ctx.C, ctx.ms.C, 1), P3 = marginP(ctx.C, ctx.ms.C, 3), P5 = marginP(ctx.C, ctx.ms.C, 5), P7 = marginP(ctx.C, ctx.ms.C, 7);
@@ -360,38 +427,60 @@ const BotAI = (() => {
         + (P3 - P5) * charmOutcome(ctx, 1, hmS).v + (P5 - P7) * charmOutcome(ctx, 2, hmS).v + P7 * charmOutcome(ctx, 3, hmS).v;
       res = { bard: wTalk > wAtt + 0.005, wAtt, wTalk };
     }
-    if (_charmMemo.size > 200000) _charmMemo.clear();
-    _charmMemo.set(key, res);
+    if (++_charmN > 200000) { _charmMemo.clear(); _charmN = 0; inner = null; }
+    if (inner) inner.set(k2, res); else if (key) _charmMemo.set(key, res);
     return res;
   }
 
   // One simulated fight. Returns { win, heartsLeft, healsUsed }
+  // Hot loop (~100k calls per game for M/DT/Charisma bots): no per-round allocations, and the
+  // dice are drawn in exactly the same order as the plain version, so results are unchanged.
+  const _malActive = { mal: null, has(s) { for (const m of this.mal) if (m.stat === s) return true; return false; } };
+  const _charmLast = new Float64Array(15);
   function simOnce(snap, mobTpl) {
     const st = { ...snap.st };
-    for (const [s, v] of Object.entries(snap.bloods)) st[s] += v;
-    const pots = {}; for (const s in snap.pots) pots[s] = snap.pots[s].slice();
+    for (const s in snap.bloods) st[s] += snap.bloods[s];
+    let pots = snap.pots;                // only read (and spent) with usePots
+    if (snap.usePots) { pots = {}; for (const s in snap.pots) pots[s] = snap.pots[s].slice(); }
     let heals = snap.heals, hp = snap.hearts, healsUsed = 0, curses = snap.curses ?? 0, smokes = snap.smokes ?? 0;
-    const spells = snap.spells.slice(); let fires = [], stunned = false, bloodKill = false;
+    const spells = snap.spells.length ? snap.spells.slice() : snap.spells; let fires = [], stunned = false;
     const base = { ...mobTpl.stats };
-    let mal = [];                        // {stat, v, left}
-    let buffs = [], near = 0;            // Charisma: our +d6 bonuses {stat, v, left}; near-miss C bonus
+    const mal = [];                      // {stat, v, left}
+    const buffs = []; let near = 0;      // Charisma: our +d6 bonuses {stat, v, left}; near-miss C bonus
     const ms = { ...base };
-    const recompute = () => { for (const k in base) ms[k] = base[k]; for (const m of mal) ms[m.stat] = Math.max(0, ms[m.stat] - m.v); };
+    const recompute = () => {
+      ms.F = base.F; ms.D = base.D; ms.A = base.A; ms.M = base.M; ms.C = base.C; ms.V = base.V;
+      for (const m of mal) ms[m.stat] = Math.max(0, ms[m.stat] - m.v);
+    };
+    const tickMal = () => { let j = 0; for (const m of mal) if (--m.left > 0) mal[j++] = m; mal.length = j; recompute(); };
     let mhp = mobTpl.hearts.max ?? mobTpl.hearts.current;
     if (snap.kryss) mhp--;
     if (mhp <= 0) return { win:true, heartsLeft:hp, healsUsed };
+    // Charisma: one ctx per fight (charmDecide/charmOutcome only read it); the decision is a pure
+    // function of these 15 numbers, so it is reused while none of them changed.
+    const ctx = snap.charm ? { st, C:0, ms, hm:0, hp:0, atk: snap.atk, arcane: snap.arcane, prot: snap.prot,
+                               immuneC: snap.immuneC, rattle: snap.rattle, endValue: mobTpl.isBoss ? 0.02 : 0.9 } : null;
+    const cl = _charmLast; let lastBard = null;
     let playerTurn = (st.V + d6()) > ms.V;
     for (let r = 0; r < 120; r++) {
       if (playerTurn) {
         if (curses > 0) {
-          const c = curseChoice(st, ms, snap.arcane, new Set(mal.map(m => m.stat)), snap.atk, snap.immuneC);
+          _malActive.mal = mal;
+          const c = curseChoice(st, ms, snap.arcane, _malActive, snap.atk, snap.immuneC);
           if (c) { curses--; mal.push({ stat:c, v:d6(), left:4 }); recompute(); }
         }
         if (snap.garrote && mhp <= 2) return { win:true, heartsLeft:hp, healsUsed };   // Garrote execute (F, no roll)
-        if (snap.charm) {
-          const ctx = { st, C: st.C + near, ms, hm: mhp, hp: hp + heals, atk: snap.atk, arcane: snap.arcane, prot: snap.prot,
-                        immuneC: snap.immuneC, rattle: snap.rattle, endValue: mobTpl.isBoss ? 0.02 : 0.9 };
-          if (charmDecide(ctx).bard) {
+        if (ctx) {
+          ctx.C = st.C + near; ctx.hm = mhp; ctx.hp = hp + heals;
+          if (lastBard === null || cl[0] !== st.F || cl[1] !== st.D || cl[2] !== st.A || cl[3] !== st.M || cl[4] !== st.C || cl[5] !== st.V
+              || cl[6] !== ms.F || cl[7] !== ms.D || cl[8] !== ms.A || cl[9] !== ms.M || cl[10] !== ms.C || cl[11] !== ms.V
+              || cl[12] !== ctx.C || cl[13] !== ctx.hm || cl[14] !== ctx.hp) {
+            lastBard = charmDecide(ctx).bard;
+            cl[0] = st.F; cl[1] = st.D; cl[2] = st.A; cl[3] = st.M; cl[4] = st.C; cl[5] = st.V;
+            cl[6] = ms.F; cl[7] = ms.D; cl[8] = ms.A; cl[9] = ms.M; cl[10] = ms.C; cl[11] = ms.V;
+            cl[12] = ctx.C; cl[13] = ctx.hm; cl[14] = ctx.hp;
+          }
+          if (lastBard) {
             const margin = ctx.C + d6() - ms.C;
             if (margin >= 1 && snap.rattle && --mhp <= 0) return { win:true, heartsLeft:hp, healsUsed };
             if (margin >= 3) {
@@ -424,17 +513,19 @@ const BotAI = (() => {
         }
       } else {
         // fire ticks at the start of the mob's half
-        if (fires.length) { fires = fires.map(f => f - 1); const dmg = fires.filter(f => f <= 0).length; fires = fires.filter(f => f > 0);
+        if (fires.length) { let j = 0; for (const f of fires) if (f > 1) fires[j++] = f - 1; const dmg = fires.length - j; fires.length = j;
           if (dmg) { mhp -= dmg; if (mhp <= 0) return { win:true, heartsLeft:hp, healsUsed }; } }
         const skip = stunned && d6() <= 3; stunned = false;
-        const atkTypes = mobAttackTypes(ms);
-        let t = atkTypes[Math.floor(rng() * atkTypes.length)];
+        // = mobAttackTypes(ms)[⌊rng·n⌋] without the array
+        const mx = Math.max(ms.F, ms.D, ms.M, ms.C);
+        let k = Math.floor(rng() * ((ms.F === mx) + (ms.D === mx) + (ms.M === mx) + (ms.C === mx)));
+        let t = ms.F === mx && k-- === 0 ? 'F' : ms.D === mx && k-- === 0 ? 'D' : ms.M === mx && k-- === 0 ? 'M' : 'C';
         if (t === 'C' && snap.immuneC) t = redirectC(ms);
         if (hp === 1 && heals > 0) { heals--; healsUsed++; hp++; }
         const dsPre = t === 'M' && snap.arcane ? 'A' : DEF[t];
         let smoked = false;
         if (!skip && smokes > 0 && smokeWorth(st[dsPre] + (t === 'M' ? snap.prot : 0), ms[t], hp)) { smokes--; smoked = true; }
-        if (skip || smoked) { if (mal.length) { mal.forEach(m => m.left--); mal = mal.filter(m => m.left > 0); recompute(); } playerTurn = !playerTurn; continue; }
+        if (skip || smoked) { if (mal.length) tickMal(); playerTurn = !playerTurn; continue; }
         const ds = t === 'M' && snap.arcane ? 'A' : DEF[t];
         let def = st[ds] + (t === 'M' ? snap.prot : 0) + d6();
         if (snap.usePots && pots[ds].length) def += pots[ds].shift();
@@ -443,8 +534,8 @@ const BotAI = (() => {
           else { hp--; if (hp <= 0) return { win:false, heartsLeft:0, healsUsed }; }
         }
         // end of round: maluses (and our Charisma bonuses) tick
-        if (mal.length) { mal.forEach(m => m.left--); mal = mal.filter(m => m.left > 0); recompute(); }
-        if (buffs.length) { for (const b of buffs) if (--b.left <= 0) st[b.stat] -= b.v; buffs = buffs.filter(b => b.left > 0); }
+        if (mal.length) tickMal();
+        if (buffs.length) { let j = 0; for (const b of buffs) { if (--b.left <= 0) st[b.stat] -= b.v; else buffs[j++] = b; } buffs.length = j; }
       }
       playerTurn = !playerTurn;
     }
@@ -527,7 +618,7 @@ const BotAI = (() => {
     const snap = snapshot(p);
     if (hearts != null) snap.hearts = hearts;
     snap.heals = 0;
-    const key = `${p.id}|${tier}|${useMap}|${snap.atk.join('')}|${JSON.stringify(snap.st)}|${snap.hearts}|${snap.kryss}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.thorns}|${snap.fury}|${snap.arcane}|${snap.charm}|${snap.rattle}`;
+    const key = `${p.id}|${tier}|${useMap}|${snap.atk.join('')}|${JSON.stringify(snap.st)}|${snap.hearts}|${snap.kryss}|${snap.garrote}|${snap.flame}|${snap.immuneC}|${snap.thorns}|${snap.fury}|${snap.hawk}|${snap.arcane}|${snap.charm}|${snap.rattle}`;
     if (_tierCache[key]) return _tierCache[key];
     const pool = MOBS.getByTier(tier).filter(m => !m.isBoss).slice(0, 6);
     const rs = pool.map(m => exactFight(snap, m) ?? simFight(snap, m, 120));
@@ -610,11 +701,144 @@ const BotAI = (() => {
   const HUNT_BOSSES = ['sea_serpent', 'prince', 'grand_sorcerer', 'witch', 'phoenix'];
   const REF_KIT = [...Array(10).fill('sp_curse'), ...Array(4).fill('pot_heal')];   // odds are compared with a typical kit
   function enchantFor(p, slot) {
-    const pr = profile(p), id = slot === pr.wslot ? (pr.weaponEnchant ?? 'bloodlust')
-      : slot === 'armor' ? (p.getStat('A') > p.getStat('M') ? 'arcane' : 'resistance')
-      : slot === 'shield' ? 'resistance' : null;
-    const e = id && ENCHANTMENTS.find(x => x.id === id);
-    return e ? { ...e, tier: 1 } : null;
+    const pick = enchantPick(p, slot);
+    const e = pick && ENCHANTMENTS.find(x => x.id === pick.id);
+    return e ? { ...e, tier: pick.tier } : null;
+  }
+  // Which enchantment a slot gets: { id, tier, cost } or null.
+  // Weapon: the profile's (or 'sim'); armor: Arcane if A beats M, else Resistance; shield: Resistance;
+  // any other equipped item (speed, charisma, …): tune.extraEnch.
+  const MAIN_ENCH = { F:'sharpness', D:'precision' };
+  const enchCost = (id, tier = 1) => { const e = ENCHANTMENTS.find(x => x.id === id); return e.cost ?? tier * 33; };
+  // 'fury1+lightness+2×resistance' → [['fury',1],['lightness',1],['resistance',1],['resistance',1]]
+  const _kits = {};
+  function parseKit(str) {
+    return _kits[str] ??= str.split('+').flatMap(part => {
+      const m = part.match(/^(?:(\d+)×)?([a-z_]+?)(\d)?$/);
+      return Array(+(m[1] ?? 1)).fill([m[2], +(m[3] ?? 1)]);
+    });
+  }
+  // Next missing entry of the fixed kit for this slot (null = nothing left for it).
+  function kitPick(p, slot, kitStr) {
+    const item = p.equipped[slot]; if (!item) return null;
+    const left = parseKit(kitStr).slice();
+    for (const s of ALL_SLOTS) {
+      const e = p.equipped[s]?.enchantment; if (!e) continue;
+      const i = left.findIndex(([id, t]) => id === e.id && t === (e.tier ?? 1));
+      if (i >= 0) left.splice(i, 1);
+    }
+    const malus = (item.statBonus?.V ?? 0) < 0;
+    const pick = (malus && left.find(([id]) => id === 'lightness')) || left.find(([id]) => id !== 'lightness');
+    return pick ? { id: pick[0], tier: pick[1], cost: enchCost(pick[0], pick[1]) } : null;
+  }
+  // ── Enchant planner ─────────────────────────────────────────────────────────
+  // Picks, among this strategy's KIT_CANDIDATES, the kit worth completing from where we are. A human
+  // can only enchant items without an enchantment, so enchants already bought stay: each candidate
+  // is scored as the kit we can still reach (our enchants + its missing entries on the free items of
+  // the boss loadout). Score = dragon P with the reference supplies − price of the missing entries
+  // / 2000 (the same trade as simEnchant) − planFarm × hearts lost per fight at the tier we farm
+  // (v1 without that term traded farm safety for dragon odds and died more often). Recomputed when gear, stats or coins (per 50) change; a
+  // new pick must beat the current one by PLAN_SWITCH to avoid flip-flopping.
+  const PLAN_SWITCH = 0.03;
+  function reachableKit(items, kitStr) {
+    const left = parseKit(kitStr).slice(), have = [];
+    for (const it of items) if (it.enchantment) {
+      const e = [it.enchantment.id, it.enchantment.tier ?? 1]; have.push(e);
+      const i = left.findIndex(([id, t]) => id === e[0] && t === e[1]); if (i >= 0) left.splice(i, 1);
+    }
+    const free = items.filter(it => !it.enchantment);
+    const malus = free.filter(it => (it.statBonus?.V ?? 0) < 0).length;
+    const lt = left.filter(([id]) => id === 'lightness'), rest = left.filter(([id]) => id !== 'lightness');
+    const add = [...lt.slice(0, malus), ...rest].slice(0, free.length);
+    const all = [...have, ...add];
+    const c = {}; for (const [id, t] of all) { const k = (id === 'fury' || id === 'hawk_eye') ? `${id}${t}` : id; c[k] = (c[k] ?? 0) + 1; }
+    const name = Object.entries(c).sort().map(([k, n]) => n > 1 ? `${n}×${k}` : k).join('+');
+    return { name, add, cost: add.reduce((a, [id, t]) => a + enchCost(id, t), 0) };
+  }
+  function kitEquip(boss, add) {
+    const eq = {}; for (const s of ALL_SLOTS) eq[s] = boss[s] ?? null;
+    const free = ALL_SLOTS.filter(s => eq[s] && !eq[s].enchantment);
+    const order = [...add].sort((a, b) => (b[0] === 'lightness') - (a[0] === 'lightness'));
+    for (const [id, tier] of order) {
+      const s = free.find(x => id !== 'lightness' || (eq[x].statBonus?.V ?? 0) < 0);
+      if (!s) return null;
+      free.splice(free.indexOf(s), 1);
+      eq[s] = { ...eq[s], enchantment: { ...ENCHANTMENTS.find(e => e.id === id), tier } };
+    }
+    return eq;
+  }
+  function plannedKit(p) {
+    const m = M(p), tn = tune(p);
+    const cands = KIT_CANDIDATES[profile(p).name];
+    if (!cands) return tn.kit;
+    const boss = bossLoadout(p);
+    const items = Object.values(boss).filter(Boolean);
+    if (items.length < 5) return m.plan?.kit ?? tn.kit ?? cands[0];             // too early to judge: default kit
+    const key = `${items.map(it => it.id + (it.enchantment ? it.enchantment.id + (it.enchantment.tier ?? 1) : '')).sort().join(',')}|${ALL6.map(s => p.baseStats[s]).join(',')}|${Math.floor(p.coins / 50)}`;
+    if (m.plan?.key === key) return m.plan.kit;
+    const ft = farmTier(p, mapFarm(p) && mapsHeld(p) > 0), wF = tn.planFarm ?? 0;
+    const seen = new Map();
+    for (const c of cands) {
+      const r = reachableKit(items, c);
+      if (seen.has(r.name)) continue;
+      const eq = kitEquip(boss, r.add);
+      if (!eq) continue;
+      const saved = p.equipped; p.equipped = eq;
+      let P, hl = 0;
+      try { P = dragonWinP(p, REF_KIT, 200); if (wF) hl = tierStats(p, ft, p.hearts.max).heartsLost; } finally { p.equipped = saved; }
+      seen.set(r.name, { kit: r.name, score: P - r.cost / 2000 - wF * hl });
+    }
+    let best = null; for (const v of seen.values()) if (!best || v.score > best.score) best = v;
+    const cur = m.plan && seen.get(reachableKit(items, m.plan.kit).name);
+    const pick = !best ? m.plan : (cur && best.score < cur.score + PLAN_SWITCH ? cur : best);
+    m.plan = { key, kit: pick?.kit ?? tn.kit ?? cands[0] };
+    return m.plan.kit;
+  }
+  function enchantPick(p, slot) {
+    const pr = profile(p), tn = tune(p);
+    if (tn.planner && KIT_CANDIDATES[pr.name]) return kitPick(p, slot, plannedKit(p));
+    if (tn.kit) return kitPick(p, slot, tn.kit);
+    let id;
+    if (slot === pr.wslot) id = tn.weaponEnch ?? pr.weaponEnchant ?? 'bloodlust';
+    else if (slot === 'armor') id = p.getStat('A') > p.getStat('M') ? 'arcane' : 'resistance';
+    else if (slot === 'shield') id = tn.shieldEnch ?? 'resistance';
+    else if (!tn.extraEnch) return null;
+    else id = tn.extraEnch === 'main' ? (MAIN_ENCH[pr.main] ?? 'resistance') : tn.extraEnch === 'A' ? 'resistance' : tn.extraEnch;
+    if (id === 'sim') return simEnchant(p, slot);
+    // Sharpness / Precision count once: if another item already has it, take Resistance (it stacks)
+    if (ENCHANTMENTS.find(e => e.id === id)?.once && ALL_SLOTS.some(s => s !== slot && p.equipped[s]?.enchantment?.id === id)) id = 'resistance';
+    return { id, tier: 1, cost: enchCost(id) };
+  }
+  // Best enchantment for this slot by simulated dragon odds (boss loadout, typical kit); cached on gear.
+  const SIM_ENCH = [['sharpness',1],['precision',1],['resistance',1],['flame',1],['thorns',1],['fury',1],['fury',2],['fury',3],['hawk_eye',1],['hawk_eye',2],['hawk_eye',3]];
+  function simEnchant(p, slot) {
+    const item = p.equipped[slot]; if (!item) return null;
+    const m = M(p);
+    const gear = ALL_SLOTS.map(s => p.equipped[s] ? p.equipped[s].id + (p.equipped[s].enchantment?.id ?? '') + (p.equipped[s].enchantment?.tier ?? '') : '-').join(',');
+    const key = `${slot}|${gear}|${ALL6.map(s => p.baseStats[s]).join(',')}`;
+    if (m.simEnch?.[key] !== undefined) return m.simEnch[key];
+    let best = null, bestV = -1;
+    const orig = item.enchantment;          // tried on the equipped item: always put the real one back
+    try {
+      for (const [id, tier] of SIM_ENCH) {
+        item.enchantment = null;
+        if ((id === 'fury' || id === 'hawk_eye' || id === 'flame' || id === 'thorns' || id === 'sharpness' || id === 'precision') && p.hasEnchantment(id)) continue;   // these don't stack
+        item.enchantment = { ...ENCHANTMENTS.find(x => x.id === id), tier };
+        const v = withBossLoadout(p, () => dragonWinP(p, REF_KIT, SIM_CMP)) - enchCost(id, tier) / 2000;   // ~0.05 per 100 coins
+        if (v > bestV) { bestV = v; best = { id, tier, cost: enchCost(id, tier) }; }
+      }
+    } finally { item.enchantment = orig; }
+    (m.simEnch ??= {})[key] = best;
+    return best;
+  }
+  // P(Charisma success of tier ≥ 1, i.e. margin ≥ 3, before the boss takes all our hearts)
+  function tradeP(p, id) {
+    const tpl = MOBS.getMob(id); if (!tpl) return 0;
+    const ctx = charmCtx(p, { mob: { ...tpl, statusEffects: [], hearts: { ...tpl.hearts } }, isBoss: true });
+    const s = marginP(ctx.C, ctx.ms.C, 3);
+    if (s <= 0) return 0;
+    const { q } = charmRates(ctx, ctx.ms, ctx.st);
+    return raceM(1, ctx.hp, s, q);
   }
   function bossDrops(id) {
     return (MOBS.getMob(id)?.lootTable ?? []).filter(e => e.itemId).flatMap(e => Array(e.count ?? 1).fill(e.itemId));
@@ -638,8 +862,22 @@ const BotAI = (() => {
       fake.storedEnchantments = { ...p.storedEnchantments };
       for (const d of new Set(drops)) { const it = getItem(d); const e = it?.slot && enchantFor(p, it.slot); if (e) fake.storedEnchantments[d] = [e]; }
       const after = withBossLoadout(fake, () => dragonWinP(fake, REF_KIT, SIM_CMP));
-      const win = withBossLoadout(p, () => mobWinP(p, id, [], 200));
-      list.push({ id, gain: after - base, win });
+      const win = tune(p).bossTrade === 'only' ? 0 : withBossLoadout(p, () => mobWinP(p, id, [], 200));
+      const opt = { id, gain: after - base, win };
+      if (tune(p).bossTrade) {
+        // trade: the single drop that helps most, if we land a Charisma success before dying
+        let best = 0, want = null;
+        for (const d of new Set(drops)) {
+          const f1 = Object.create(p);
+          f1.inventory = p.inventory.concat([d]);
+          f1.storedEnchantments = { ...p.storedEnchantments };
+          const it = getItem(d), e = it?.slot && enchantFor(p, it.slot); if (e) f1.storedEnchantments[d] = [e];
+          const g = withBossLoadout(f1, () => dragonWinP(f1, REF_KIT, SIM_CMP)) - base;
+          if (g > best) { best = g; want = d; }
+        }
+        Object.assign(opt, { tradeGain: best, want, tradeP: withBossLoadout(p, () => tradeP(p, id)) });
+      }
+      list.push(opt);
     }
     m.bossOpt = { key, list };
     return list;
@@ -734,6 +972,8 @@ const BotAI = (() => {
         k = b.M > Math.max(b.F, b.D) ? 'M' : b.D >= b.F ? 'D' : 'F';
       }
       m.profile = PROFILES[k];
+      const kit = KIT_OVERRIDES[k] ?? PROFILE_KITS[k];
+      if (kit && genomeTune?.kit === undefined) genomeTune = { ...(genomeTune ?? {}), kit };   // a genome can pass kit:null to turn it off
       if (genomeTune || m.profile.tune) m.tune = { ...DEFAULT_TUNE, ...(m.profile.tune ?? {}), ...(genomeTune ?? {}) };
       if (m.profile.main === 'auto') {
         const main = p.baseStats.D >= p.baseStats.F ? 'D' : 'F';
@@ -775,6 +1015,10 @@ const BotAI = (() => {
     const eq = p.equipped;
     const wslot = pr.wslot;
     const has = id => p.hasItem(id) || p.hasEquipped(id);
+    // best bonus among everything we own for a slot — not just what's equipped: a boss-only item
+    // (e.g. an Enchanted Flute while the Bottomless Bag holds the farm slot) made the bot sell the
+    // Accordion as inferior and then buy it back, forever
+    const owned = (slot, stat) => Math.max(itemVal(eq[slot], stat), ...p.inventory.map(id => getItem(id)).filter(it => it?.slot === slot).map(it => itemVal(it, stat)));
     const tn = tune(p), speedEarly = tn.speedEarly ?? !!pr.speedEarly;
     const skillStep = () => {
       if ((p.masterSkillsBought ?? 0) >= Math.min(5, tn.skills)) return;
@@ -784,38 +1028,56 @@ const BotAI = (() => {
     // random rolls would (handleShop tops up to mapStock whenever we're in a shop anyway)
     if (mapFarm(p) && mapsHeld(p) === 0 && mapsPay(p)) list.push({ where:'shop', id:'map' });
     if (pr.guildExtra && pr.extraFirst && !has(pr.guildExtra)) list.push({ where:'guild', id:pr.guildExtra });
-    if (pr.beast && itemVal(eq.charisma, 'C') < 3 && !has('lute') && !has('accordion')) list.push({ where:'shop', id:'lute' });
+    if (pr.beast && owned('charisma', 'C') < 3 && !has('lute') && !has('accordion')) list.push({ where:'shop', id:'lute' });
     const charmInstrument = pr.charm && pr.guildExtra !== 'cursed_rattle';
     if (pr.needsSpell && !p.canAttackMagic()) list.push({ where:'master', buySpell:'bang', cost:10 });
     if (pr.guildWeapon) {
       if (!has(pr.weapon)) list.push({ where:'guild', id:pr.weapon });
     } else if (!has(pr.weapon) && itemVal(eq[wslot], ms) < 6) list.push({ where:'shop', id:pr.weapon, minTier:6 });
-    const wench = pr.weaponEnchant ?? 'bloodlust';
     const wantWEnch = eq[wslot] && !eq[wslot].enchantment && (itemVal(eq[wslot], ms) >= 6 || eq[wslot].id === pr.weapon);
+    const wEnch = () => { const e = enchantPick(p, wslot); return e && { where:'master', enchant:e.id, tier:e.tier, slot:wslot, cost:e.cost }; };
     if (tn.skillsEarly) skillStep();
     if (speedEarly) {
-      if (wantWEnch) list.push({ where:'master', enchant:wench, slot:wslot, cost: ENCHANTMENTS.find(e => e.id === wench).cost });
-      if (tn.pegasus && !has('pegasus') && itemVal(eq.speed, 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
+      if (wantWEnch && wEnch()) list.push(wEnch());
+      if (tn.pegasus && !has('pegasus') && owned('speed', 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
     }
-    if (charmInstrument && itemVal(eq.charisma, 'C') < 6 && !has('accordion')) list.push({ where:'shop', id:'accordion', minTier:6 });
+    if (charmInstrument && owned('charisma', 'C') < 6 && !has('accordion')) list.push({ where:'shop', id:'accordion', minTier:6 });
     if (!has('hv_armor') && itemVal(eq.armor, 'A') < 6) list.push({ where:'shop', id:'hv_armor', minTier:4 });
     if (tn.shield && !has('lg_shield') && itemVal(eq.shield, 'A') < 3) list.push({ where:'shop', id:'lg_shield', minTier:2 });
+    const shEnch = tn.shieldEnch ?? 'resistance';
     if (mapFarm(p)) {                                      // A first: the tank is what makes the Maps pay
-      if (eq.armor && !eq.armor.enchantment && eq.armor.id !== 'invis_cloak' && itemVal(eq.armor, 'A') >= 6) list.push({ where:'master', enchant:'resistance', slot:'armor', cost:50 });
-      if (eq.shield && !eq.shield.enchantment && itemVal(eq.shield, 'A') >= 3) list.push({ where:'master', enchant:'resistance', slot:'shield', cost:50 });
+      if (eq.armor && !eq.armor.enchantment && eq.armor.id !== 'invis_cloak' && itemVal(eq.armor, 'A') >= 6) {
+        const e = (tn.kit || tn.planner) ? enchantPick(p, 'armor') : { id:'resistance', cost:50 };
+        if (e) list.push({ where:'master', enchant:e.id, tier:e.tier, slot:'armor', cost:e.cost });
+      }
+      if (eq.shield && !eq.shield.enchantment && itemVal(eq.shield, 'A') >= 3) {
+        const e = (tn.kit || tn.planner) ? enchantPick(p, 'shield') : { id:shEnch, cost:enchCost(shEnch) };
+        if (e) list.push({ where:'master', enchant:e.id, tier:e.tier, slot:'shield', cost:e.cost });
+      }
     }
-    if (!speedEarly && wantWEnch) list.push({ where:'master', enchant:wench, slot:wslot, cost: ENCHANTMENTS.find(e => e.id === wench).cost });
+    if (!speedEarly && wantWEnch && wEnch()) list.push(wEnch());
     if (pr.guildExtra && !pr.extraFirst && !has(pr.guildExtra)) list.push({ where:'guild', id:pr.guildExtra });
-    if (tn.pegasus && !has('pegasus') && itemVal(eq.speed, 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
+    if (tn.pegasus && !has('pegasus') && owned('speed', 'V') < 6) list.push({ where:'shop', id:'pegasus', minTier:6 });
     if (!tn.skillsEarly) skillStep();
     if (tn.armorEnch && eq.armor && !eq.armor.enchantment && eq.armor.id !== 'invis_cloak' && itemVal(eq.armor, 'A') >= 6) {
       // Arcane only pays off if Armor beats Magic as a defence (true for F/D, often not for mages)
       const arc = !mapFarm(p) && p.getStat('A') > p.getStat('M');
-      list.push({ where:'master', enchant: arc ? 'arcane' : 'resistance', slot:'armor', cost:50 });
+      const e = (tn.kit || tn.planner) ? enchantPick(p, 'armor') : { id: arc ? 'arcane' : 'resistance', cost:50 };
+      if (e) list.push({ where:'master', enchant:e.id, tier:e.tier, slot:'armor', cost:e.cost });
     }
-    if (tn.shieldRes && eq.shield && !eq.shield.enchantment) list.push({ where:'master', enchant:'resistance', slot:'shield', cost:50 });
+    if (tn.shieldRes && eq.shield && !eq.shield.enchantment) {
+      const e = (tn.kit || tn.planner) ? enchantPick(p, 'shield') : { id:shEnch, cost:enchCost(shEnch) };
+      if (e) list.push({ where:'master', enchant:e.id, tier:e.tier, slot:'shield', cost:e.cost });
+    }
+    // every other equipped item can carry an enchantment too (+3 stat enchants stack across slots)
+    if (tn.extraEnch || tn.kit || tn.planner) for (const slot of ALL_SLOTS) {
+      const it = eq[slot];
+      if (!it || it.enchantment || slot === wslot || slot === 'armor' || slot === 'shield') continue;
+      const e = enchantPick(p, slot);
+      if (e) list.push({ where:'master', enchant:e.id, tier:e.tier, slot, cost:e.cost });
+    }
     const guildInCharisma = pr.guildExtra && getItem(pr.guildExtra)?.slot === 'charisma';   // e.g. the Rattle owns the slot
-    if (tn.accordion && !guildInCharisma && !has('accordion') && itemVal(eq.charisma, 'C') < 6) list.push({ where:'shop', id:'accordion', minTier:6 });
+    if (tn.accordion && !guildInCharisma && !has('accordion') && owned('charisma', 'C') < 6) list.push({ where:'shop', id:'accordion', minTier:6 });
     if (tn.cloak && !has('invis_cloak') && !cloakSoldOut()) list.push({ where:'guild', id:'invis_cloak', cost:100 });
     if (tn.rope && !has('rope')) list.push({ where:'shop', id:'rope' });
     // PvP kit (only matters with rivals alive): chains to stop escapes, invisibility to escape
@@ -1050,10 +1312,15 @@ const BotAI = (() => {
       // not ready: a boss whose drops would help, and which we can beat now
       const tn = tune(p);
       if (tn.bosses && !profile(p).beast) {
-        const opts = bossOptions(p).filter(b => b.gain >= tn.bossGain && b.win >= tn.bossGo).sort((a, b) => b.gain - a.gain);
-        for (const b of opts) {
+        const opts = [];
+        for (const b of bossOptions(p)) {
+          if (tn.bossTrade !== 'only' && b.gain >= tn.bossGain && b.win >= tn.bossGo) opts.push({ kind:'boss', id:b.id, winP:b.win, gain:b.gain });
+          if (tn.bossTrade && b.want && b.tradeGain >= tn.tradeGain && b.tradeP >= tn.bossGo) opts.push({ kind:'boss', id:b.id, winP:b.tradeP, gain:b.tradeGain, trade:true, want:b.want });
+        }
+        opts.sort((a, b) => b.gain - a.gain);
+        for (const o of opts) {
           if (p.hearts.current < p.hearts.max) yield { kind:'heal' };
-          yield { kind:'boss', id:b.id, winP:b.win, gain:b.gain };
+          yield o;
         }
       }
       const plan = withBossLoadout(p, () => cachedPlan(p));
@@ -1181,14 +1448,27 @@ const BotAI = (() => {
   }
 
   function mapsPay(p) { return farmTier(p, true) > farmTier(p, false); }
+  // Guild weapon level ladder: Lv.1 → z0, Lv.2 → z1, Lv.3+ → z2 (kills per level: progress resets
+  // on level-up and zone weights are 1/2/4/8, so this is close to the fewest kills to Lv.6)
+  function guildLadderTier(p) {
+    const pr = profile(p);
+    if (!pr.guildWeapon || !tune(p).guildLadder || !p.hasEquipped(pr.weapon)) return -1;
+    const lv = p.guildItemLevels?.[pr.weapon]?.itemLevel ?? 1;
+    return lv >= 6 ? -1 : lv === 1 ? 0 : lv === 2 ? 1 : 2;
+  }
   function farmTier(p, useMap) {
     // Highest tier with good win probability at full health; reward grows with tier.
     let best = 0;
+    const lt = guildLadderTier(p);
+    if (lt > 0) {
+      const { winP, heartsLost } = tierStats(p, lt, null, useMap);
+      if (winP >= tune(p).guildFarmWin && heartsLost <= tune(p).farmHearts + 0.7) best = lt;
+    }
     for (let t = 0; t <= 3; t++) {
       const { winP, heartsLost } = tierStats(p, t, null, useMap);
       const sustain = p.hasEnchantment('bloodlust') ? 1 : 0;
-      if (canAlwaysEscape(p)) { if (fightOK(p, t, p.hearts.max, 0, 0.75)) best = t; continue; }
-      if (winP >= tune(p).farmWin && heartsLost - sustain <= tune(p).farmHearts) best = t;
+      if (canAlwaysEscape(p)) { if (fightOK(p, t, p.hearts.max, 0, 0.75)) best = Math.max(best, t); continue; }
+      if (winP >= tune(p).farmWin && heartsLost - sustain <= tune(p).farmHearts) best = Math.max(best, t);
     }
     return best;
   }
@@ -1287,8 +1567,11 @@ const BotAI = (() => {
     const lv = item.guild ? (p.guildItemLevels?.[item.id]?.itemLevel ?? 1) - 1 : 0;
     v += lv;
     const statEnch = e => e?.effect?.type === 'stat_bonus' && e.effect.stat === ms ? e.effect.value : 0;
-    if (item.enchantment) v += statEnch(item.enchantment) || 1;
-    else v += (statEnch(ENCHANTMENTS.find(e => e.id === pr.weaponEnchant)) || 1) - 0.5;   // potential, slightly discounted
+    const pot = (tune(p).kit ? 1 : (statEnch(ENCHANTMENTS.find(e => e.id === pr.weaponEnchant)) || 1)) - 0.5;   // potential, slightly discounted
+    // an enchanted copy never scores below a plain one: equipping the plain copy would pull the stored
+    // enchantment back onto it, and the bot would swap the two forever (Fury from a kit, Resistance fallback)
+    if (item.enchantment) v += Math.max(statEnch(item.enchantment) || 1, pot + 0.5);
+    else v += pot;
     return (pr.guildWeapon && item.id === pr.weapon ? 100 : 0) + v;
   }
   function wantCloak(p) {
@@ -1451,7 +1734,7 @@ const BotAI = (() => {
       if (it.skill)   return act({ type:'buy_skill', stat:it.skill });
       if (it.buySpell) return act({ type:'buy', itemId:it.buySpell });
       if (it.enchant && p.equipped[it.slot] && !p.equipped[it.slot].enchantment)
-        return act({ type:'enchant', slot:it.slot, enchantId:it.enchant, tier:1 });
+        return act({ type:'enchant', slot:it.slot, enchantId:it.enchant, tier:it.tier ?? 1 });
     }
     if (shoppingList(p).length === 0) {
       const plan = withBossLoadout(p, () => cachedPlan(p));
@@ -1595,6 +1878,12 @@ const BotAI = (() => {
   function charmPick(p, c) {
     const maxTier = Combat.charismaMaxTier(c.charismaResult?.diff ?? 0);
     if (maxTier < 1) return { retreat:true };
+    const g = M(p).goal;
+    if (c.isBoss && g?.trade) {
+      const loot = c.charismaResult?.pendingLoot?.items ?? [];
+      const want = loot.includes(g.want) ? g.want : loot.slice().sort((a, b) => itemWorth(b) - itemWorth(a))[0] ?? null;
+      return { family:'respect', tier:1, mobItemId: want, playerItemId: null };
+    }
     const o = charmOutcome(charmCtx(p, c), maxTier, c.mob.hearts.current);
     switch (o.kind) {
       case 'kill':  return { family:'kill', tier:1 };
@@ -1635,6 +1924,13 @@ const BotAI = (() => {
     }
 
     // player_attack
+    if (big && charm && M(p).goal?.trade) {               // boss trade: talk until a success, never fight
+      if (p.hearts.current === 1 && !p.hasItem('pot_heal') && p.canEscape()) return act({ type:'bail' });
+      if (!p.hasTempBonus('C') && marginP(p.getStat('C'), currentMobStats(c.mob).C, 3) < 1) {
+        const pot = bestPot(p, 'C'); if (pot) return act({ type:'use_item', itemId:pot });
+      }
+      return act({ type:'bard' });
+    }
     if (big) {
       // blood drops once at the start of a boss fight
       for (const id of p.inventory) {
@@ -1733,7 +2029,8 @@ const BotAI = (() => {
   function simPvp(A, B, n = 300) { let w = 0; for (let i = 0; i < n; i++) if (simPvpOnce(A, B)) w++; return w / n; }
   const _pvpCache = {};
   function pvpWinP(p, q, n = 200) {
-    const k = `${p.id}>${q.id}|${p.hearts.current},${q.hearts.current}|${p.inventory.length},${q.inventory.length}|${['F','D','A','M','V','C'].map(s => p.getStat(s) + ':' + q.getStat(s)).join()}`;
+    const ench = x => ['flame','thorns','arcane'].map(e => +x.hasEnchantment(e)).join('');   // they change the duel, not the stats
+    const k = `${p.id}>${q.id}|${p.hearts.current},${q.hearts.current}|${p.inventory.length},${q.inventory.length}|${['F','D','A','M','V','C'].map(s => p.getStat(s) + ':' + q.getStat(s)).join()}|${ench(p)}${ench(q)}`;
     return _pvpCache[k] ??= simPvp(pvpSide(p), pvpSide(q), n);
   }
 
@@ -2034,5 +2331,5 @@ const BotAI = (() => {
   function getStrategy(p) { return profile(p).name; }
 
   return { takeTurn, chooseCombatAction, getPhase, configure, getStrategy, pvpTick,
-           _debug: { exactFight, bossLoadout, withBossLoadout, friendDragonP, raceM, beatP, charmDecide, charmOutcome, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, snapshot, curseChoice, smokeWorth, planKit, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, goalTargets, reachableFrom, healGoal, walkNeed, safeMinibossTier, field, landingAdjust, chooseMove, simFight, snapshot, mem } };
+           _debug: { exactFight, bossLoadout, withBossLoadout, friendDragonP, raceM, beatP, charmDecide, charmOutcome, reach: (p, c) => { const f = field(p, tilesOf(TileType.FINISH), c); return f[p.position.y * W + p.position.x] < INF; }, huntPlan, carrier, simPvp, pvpSide, snapshot, curseChoice, smokeWorth, planKit, kitCandidates, dragonWinP, tierWinP, tierStats, farmTier, shoppingList, chooseGoal, goalTargets, reachableFrom, healGoal, walkNeed, safeMinibossTier, bossOptions, tradeP, field, landingAdjust, chooseMove, simFight, snapshot, mem } };
 })();

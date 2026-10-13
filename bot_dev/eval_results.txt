@@ -67,3 +67,28 @@ CH extraEnch sim                                             mean  128.1  median
 CH kill bosses (old)                                         mean  108.6  median   81  kill-median   79  deaths 17/100  timeouts 0
 CH no bosses                                                 mean  100.5  median   79  kill-median   76  deaths 14/100  timeouts 0
 (3101s)
+== DEV3 (after owned-slot + enchant-restore fixes; genomes3)
+F                                                            mean  102.2  median   86  kill-median   85  deaths 9/100  timeouts 0
+D                                                            mean  113.8  median   90  kill-median   87  deaths 16/100  timeouts 0
+FB                                                           mean  112.4  median   92  kill-median   90  deaths 13/100  timeouts 0
+DB                                                           mean  116.5  median   98  kill-median   95  deaths 13/100  timeouts 0
+DG                                                           mean  101.2  median   83  kill-median   81  deaths 11/100  timeouts 0
+DBG                                                          mean  105.4  median   84  kill-median   83  deaths 12/100  timeouts 0
+M                                                            mean  128.0  median  115  kill-median  113  deaths 12/100  timeouts 0
+G                                                            mean  114.9  median   90  kill-median   84  deaths 17/100  timeouts 0
+GB                                                           mean  123.8  median  101  kill-median   96  deaths 17/100  timeouts 0
+BP                                                           mean  113.7  median  100  kill-median   99  deaths 10/100  timeouts 0
+DT                                                           mean  159.8  median  152  kill-median  147  deaths 12/100  timeouts 0
+SS                                                           mean  146.8  median  116  kill-median  108  deaths 26/100  timeouts 0
+BB                                                           mean  109.4  median   93  kill-median   89  deaths 11/100  timeouts 0
+BM                                                           mean  133.8  median   97  kill-median   88  deaths 27/100  timeouts 0
+CH                                                           mean  102.1  median   79  kill-median   78  deaths 14/100  timeouts 0
+CR                                                           mean  113.2  median   88  kill-median   84  deaths 17/100  timeouts 0
+M weapon Bloodlust                                           mean  132.2  median  116  kill-median  110  deaths 13/100  timeouts 0
+DT weapon Bloodlust (old)                                    mean  162.7  median  148  kill-median  143  deaths 17/100  timeouts 0
+F extraEnch sim                                              mean  103.6  median   83  kill-median   82  deaths 12/100  timeouts 0
+D extraEnch sim                                              mean  105.1  median   86  kill-median   83  deaths 12/100  timeouts 0
+DG extraEnch sim                                             mean  103.7  median   82  kill-median   80  deaths 13/100  timeouts 0
+CH extraEnch sim                                             mean  104.1  median   78  kill-median   76  deaths 16/100  timeouts 0
+BM dragonGo 0.95                                             mean  191.3  median  189  kill-median  178  deaths 19/100  timeouts 0
+(3287s)

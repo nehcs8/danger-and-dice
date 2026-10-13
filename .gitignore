@@ -23,3 +23,7 @@ engine_sim_results.json
 
 # Strategy tournament output
 results/
+
+# Generated tournament bot (bot_dev/make_kit_bot.js)
+bot_dev/bot_v2_kits.js
+*.orig
